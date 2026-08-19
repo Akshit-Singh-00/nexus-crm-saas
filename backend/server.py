@@ -19,10 +19,14 @@ import httpx
 import stripe
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -46,6 +50,29 @@ db = client[DB_NAME]
 app = FastAPI(title="NexusCRM API")
 api = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
+
+# ----------- Rate limiter (best-effort, in-memory) -----------
+# headers_enabled=False avoids requiring a Response param on every rate-limited endpoint.
+_RATE_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "1") != "0"
+limiter = Limiter(key_func=get_remote_address, headers_enabled=False, enabled=_RATE_ENABLED)
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests. Please slow down and try again shortly."},
+    )
+
+
+# ----------- Generic error handler (no stack traces to clients) -----------
+@app.exception_handler(Exception)
+async def _generic_error_handler(request: Request, exc: Exception):
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    logging.exception("Unhandled server error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # ----------- Helpers -----------
 def now_iso() -> str:
@@ -310,7 +337,8 @@ async def log_activity(workspace_id: str, actor_id: str, action: str,
 
 # ----------- Auth -----------
 @api.post("/auth/signup")
-async def signup(body: SignupIn):
+@limiter.limit("60/hour")
+async def signup(request: Request, body: SignupIn):
     existing = await db.users.find_one({"email": body.email.lower()})
     if existing:
         raise HTTPException(400, "Email already registered")
@@ -330,11 +358,33 @@ async def signup(body: SignupIn):
     return {"token": token, "user": user}
 
 @api.post("/auth/login")
-async def login(body: LoginIn):
+@limiter.limit("30/minute")
+async def login(request: Request, body: LoginIn):
     user = await db.users.find_one({"email": body.email.lower()})
     if not user or not verify_pw(body.password, user["password"]):
+        # Audit failed login attempts (no password/token logged)
+        await db.audit_logs.insert_one({
+            "id": new_id(),
+            "workspace_id": None,
+            "user_id": None,
+            "user_email": body.email.lower(),
+            "action": "login_failed",
+            "resource": "auth",
+            "resource_id": body.email.lower(),
+            "created_at": now_iso(),
+        })
         raise HTTPException(401, "Invalid credentials")
     token = make_token(user["id"])
+    await db.audit_logs.insert_one({
+        "id": new_id(),
+        "workspace_id": None,
+        "user_id": user["id"],
+        "user_email": user.get("email"),
+        "action": "login_success",
+        "resource": "auth",
+        "resource_id": user["id"],
+        "created_at": now_iso(),
+    })
     user.pop("password", None)
     user.pop("_id", None)
     return {"token": token, "user": user}
@@ -408,7 +458,9 @@ async def list_members(ctx: dict = Depends(require_workspace)):
     ]
 
 @api.post("/workspaces/invite")
-async def invite_member(body: InviteIn, ctx: dict = Depends(require_perm("member", "invite"))):
+@limiter.limit("60/hour")
+async def invite_member(request: Request, body: InviteIn,
+                        ctx: dict = Depends(require_perm("member", "invite"))):
     # Create signed invite token (7 days)
     workspace = await db.workspaces.find_one({"id": ctx["workspace_id"]}, {"_id": 0})
     token_payload = {
@@ -473,6 +525,13 @@ async def accept_invite(token: str, body: InviteAcceptIn):
     email = payload["email"].lower()
     workspace_id = payload["workspace_id"]
 
+    # Reject already-accepted invites (one-time use)
+    already = await db.invites.find_one(
+        {"workspace_id": workspace_id, "email": email, "accepted": True}, {"_id": 1}
+    )
+    if already:
+        raise HTTPException(400, "This invitation has already been used")
+
     # Find or create user
     user = await db.users.find_one({"email": email})
     if user:
@@ -519,17 +578,89 @@ def workspace_query(ctx: dict, extra: dict = None) -> dict:
         q.update(extra)
     return q
 
+
+# ----------- Security helpers -----------
+def escape_regex(s: str) -> str:
+    """Escape user input before using it in a MongoDB $regex query to prevent ReDoS / injection."""
+    return re.escape(s or "")
+
+
+def clamp_limit(limit: int, default: int = 25, maximum: int = 100) -> int:
+    if not isinstance(limit, int) or limit <= 0:
+        return default
+    return min(limit, maximum)
+
+
+def clamp_skip(page: int, limit: int) -> int:
+    page = max(1, int(page or 1))
+    return (page - 1) * limit
+
+
+async def ensure_customer_in_workspace(customer_id: Optional[str], workspace_id: str) -> None:
+    if not customer_id:
+        return
+    exists = await db.customers.find_one(
+        {"id": customer_id, "workspace_id": workspace_id}, {"_id": 1}
+    )
+    if not exists:
+        raise HTTPException(400, "Referenced customer not found in this workspace")
+
+
+async def ensure_deal_in_workspace(deal_id: Optional[str], workspace_id: str) -> None:
+    if not deal_id:
+        return
+    exists = await db.deals.find_one(
+        {"id": deal_id, "workspace_id": workspace_id}, {"_id": 1}
+    )
+    if not exists:
+        raise HTTPException(400, "Referenced deal not found in this workspace")
+
+
+async def ensure_lead_in_workspace(lead_id: Optional[str], workspace_id: str) -> None:
+    if not lead_id:
+        return
+    exists = await db.leads.find_one(
+        {"id": lead_id, "workspace_id": workspace_id}, {"_id": 1}
+    )
+    if not exists:
+        raise HTTPException(400, "Referenced lead not found in this workspace")
+
+
+async def ensure_related_in_workspace(related_type: Optional[str], related_id: Optional[str],
+                                      workspace_id: str) -> None:
+    if not related_type or not related_id:
+        return
+    coll = {"customer": db.customers, "lead": db.leads, "deal": db.deals}.get(related_type)
+    if coll is None:
+        raise HTTPException(400, f"Invalid related_type: {related_type}")
+    exists = await coll.find_one(
+        {"id": related_id, "workspace_id": workspace_id}, {"_id": 1}
+    )
+    if not exists:
+        raise HTTPException(400, "Referenced record not found in this workspace")
+
+
+async def ensure_assignee_in_workspace(assignee_id: Optional[str], workspace_id: str) -> None:
+    """A user can only be assigned work if they are a member of the same workspace."""
+    if not assignee_id:
+        return
+    membership = await db.memberships.find_one(
+        {"user_id": assignee_id, "workspace_id": workspace_id}, {"_id": 1}
+    )
+    if not membership:
+        raise HTTPException(400, "Assignee is not a member of this workspace")
+
 # ----------- Customers -----------
 @api.get("/customers")
-async def list_customers(search: str = "", ctx: dict = Depends(require_perm("customer", "view"))):
+async def list_customers(search: str = "", page: int = 1, limit: int = 100,
+                         ctx: dict = Depends(require_perm("customer", "view"))):
+    limit = clamp_limit(limit, default=100, maximum=100)
+    skip = clamp_skip(page, limit)
     q = workspace_query(ctx)
     if search:
-        q["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"email": {"$regex": search, "$options": "i"}},
-            {"company": {"$regex": search, "$options": "i"}},
-        ]
-    docs = await db.customers.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+        rx = {"$regex": escape_regex(search), "$options": "i"}
+        q["$or"] = [{"name": rx}, {"email": rx}, {"company": rx}]
+    docs = await db.customers.find(q, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
     return docs
 
 @api.post("/customers")
@@ -564,27 +695,30 @@ async def update_customer(cid: str, body: CustomerIn, ctx: dict = Depends(requir
     if not r.matched_count:
         raise HTTPException(404, "Not found")
     await log_activity(ctx["workspace_id"], ctx["user"]["id"], "updated", "customer", cid)
+    await audit(ctx, "updated", "customer", cid, after={"name": body.name})
     return {"ok": True}
 
 @api.delete("/customers/{cid}")
 async def delete_customer(cid: str, ctx: dict = Depends(require_perm("customer", "delete"))):
+    before = await db.customers.find_one(workspace_query(ctx, {"id": cid}), {"_id": 0})
     r = await db.customers.delete_one(workspace_query(ctx, {"id": cid}))
     if not r.deleted_count:
         raise HTTPException(404, "Not found")
     await log_activity(ctx["workspace_id"], ctx["user"]["id"], "deleted", "customer", cid)
+    await audit(ctx, "deleted", "customer", cid, before=before)
     return {"ok": True}
 
 # ----------- Leads -----------
 @api.get("/leads")
-async def list_leads(search: str = "", ctx: dict = Depends(require_perm("lead", "view"))):
+async def list_leads(search: str = "", page: int = 1, limit: int = 100,
+                     ctx: dict = Depends(require_perm("lead", "view"))):
+    limit = clamp_limit(limit, default=100, maximum=100)
+    skip = clamp_skip(page, limit)
     q = workspace_query(ctx)
     if search:
-        q["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"email": {"$regex": search, "$options": "i"}},
-            {"company": {"$regex": search, "$options": "i"}},
-        ]
-    return await db.leads.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+        rx = {"$regex": escape_regex(search), "$options": "i"}
+        q["$or"] = [{"name": rx}, {"email": rx}, {"company": rx}]
+    return await db.leads.find(q, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
 
 @api.post("/leads")
 async def create_lead(body: LeadIn, ctx: dict = Depends(require_perm("lead", "create"))):
@@ -612,6 +746,7 @@ async def update_lead(lid: str, body: LeadIn, ctx: dict = Depends(require_perm("
     )
     if not r.matched_count:
         raise HTTPException(404, "Not found")
+    await log_activity(ctx["workspace_id"], ctx["user"]["id"], "updated", "lead", lid)
     return {"ok": True}
 
 @api.delete("/leads/{lid}")
@@ -619,6 +754,7 @@ async def delete_lead(lid: str, ctx: dict = Depends(require_perm("lead", "delete
     r = await db.leads.delete_one(workspace_query(ctx, {"id": lid}))
     if not r.deleted_count:
         raise HTTPException(404, "Not found")
+    await log_activity(ctx["workspace_id"], ctx["user"]["id"], "deleted", "lead", lid)
     return {"ok": True}
 
 # ----------- Deal risk detection -----------
@@ -660,14 +796,19 @@ def _compute_deal_risk(deal: dict) -> dict:
 
 # ----------- Deals -----------
 @api.get("/deals")
-async def list_deals(ctx: dict = Depends(require_perm("deal", "view"))):
-    deals = await db.deals.find(workspace_query(ctx), {"_id": 0}).sort("created_at", -1).to_list(500)
+async def list_deals(page: int = 1, limit: int = 100,
+                     ctx: dict = Depends(require_perm("deal", "view"))):
+    limit = clamp_limit(limit, default=100, maximum=100)
+    skip = clamp_skip(page, limit)
+    deals = await db.deals.find(workspace_query(ctx), {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
     for d in deals:
         d["risk"] = _compute_deal_risk(d)
     return deals
 
 @api.post("/deals")
 async def create_deal(body: DealIn, ctx: dict = Depends(require_perm("deal", "create"))):
+    await ensure_customer_in_workspace(body.customer_id, ctx["workspace_id"])
+    await ensure_assignee_in_workspace(body.assignee_id, ctx["workspace_id"])
     doc = {
         "id": new_id(),
         "workspace_id": ctx["workspace_id"],
@@ -684,12 +825,15 @@ async def create_deal(body: DealIn, ctx: dict = Depends(require_perm("deal", "cr
 
 @api.put("/deals/{did}")
 async def update_deal(did: str, body: DealIn, ctx: dict = Depends(require_perm("deal", "edit"))):
+    await ensure_customer_in_workspace(body.customer_id, ctx["workspace_id"])
+    await ensure_assignee_in_workspace(body.assignee_id, ctx["workspace_id"])
     r = await db.deals.update_one(
         workspace_query(ctx, {"id": did}),
         {"$set": {**body.model_dump(), "updated_at": now_iso()}},
     )
     if not r.matched_count:
         raise HTTPException(404, "Not found")
+    await log_activity(ctx["workspace_id"], ctx["user"]["id"], "updated", "deal", did)
     return {"ok": True}
 
 @api.patch("/deals/{did}/stage")
@@ -720,18 +864,24 @@ async def delete_deal(did: str, ctx: dict = Depends(require_perm("deal", "delete
     r = await db.deals.delete_one(workspace_query(ctx, {"id": did}))
     if not r.deleted_count:
         raise HTTPException(404, "Not found")
+    await log_activity(ctx["workspace_id"], ctx["user"]["id"], "deleted", "deal", did)
     return {"ok": True}
 
 # ----------- Tasks -----------
 @api.get("/tasks")
-async def list_tasks(status_filter: Optional[str] = None, ctx: dict = Depends(require_perm("task", "view"))):
+async def list_tasks(status_filter: Optional[str] = None, page: int = 1, limit: int = 100,
+                     ctx: dict = Depends(require_perm("task", "view"))):
+    limit = clamp_limit(limit, default=100, maximum=100)
+    skip = clamp_skip(page, limit)
     q = workspace_query(ctx)
     if status_filter:
         q["status"] = status_filter
-    return await db.tasks.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return await db.tasks.find(q, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
 
 @api.post("/tasks")
 async def create_task(body: TaskIn, ctx: dict = Depends(require_perm("task", "create"))):
+    await ensure_assignee_in_workspace(body.assignee_id, ctx["workspace_id"])
+    await ensure_related_in_workspace(body.related_type, body.related_id, ctx["workspace_id"])
     doc = {
         "id": new_id(),
         "workspace_id": ctx["workspace_id"],
@@ -757,6 +907,8 @@ async def create_task(body: TaskIn, ctx: dict = Depends(require_perm("task", "cr
 
 @api.put("/tasks/{tid}")
 async def update_task(tid: str, body: TaskIn, ctx: dict = Depends(require_perm("task", "edit"))):
+    await ensure_assignee_in_workspace(body.assignee_id, ctx["workspace_id"])
+    await ensure_related_in_workspace(body.related_type, body.related_id, ctx["workspace_id"])
     r = await db.tasks.update_one(
         workspace_query(ctx, {"id": tid}),
         {"$set": {**body.model_dump(), "updated_at": now_iso()}},
@@ -775,11 +927,13 @@ async def delete_task(tid: str, ctx: dict = Depends(require_perm("task", "delete
 # ----------- Notes -----------
 @api.get("/notes")
 async def list_notes(related_type: str, related_id: str, ctx: dict = Depends(require_workspace)):
+    if related_type not in ("customer", "lead", "deal"):
+        raise HTTPException(400, "Invalid related_type")
     q = workspace_query(ctx, {"related_type": related_type, "related_id": related_id})
-    docs = await db.notes.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    docs = await db.notes.find(q, {"_id": 0}).sort("created_at", -1).to_list(100)
     # attach author names
     uids = list({d["author_id"] for d in docs})
-    users = await db.users.find({"id": {"$in": uids}}, {"_id": 0, "password": 0}).to_list(500)
+    users = await db.users.find({"id": {"$in": uids}}, {"_id": 0, "password": 0}).to_list(100)
     umap = {u["id"]: u for u in users}
     for d in docs:
         d["author"] = umap.get(d["author_id"], {"name": "Unknown"})
@@ -787,6 +941,7 @@ async def list_notes(related_type: str, related_id: str, ctx: dict = Depends(req
 
 @api.post("/notes")
 async def create_note(body: NoteIn, ctx: dict = Depends(require_perm("note", "create"))):
+    await ensure_related_in_workspace(body.related_type, body.related_id, ctx["workspace_id"])
     doc = {
         "id": new_id(),
         "workspace_id": ctx["workspace_id"],
@@ -801,11 +956,12 @@ async def create_note(body: NoteIn, ctx: dict = Depends(require_perm("note", "cr
 # ----------- Activities -----------
 @api.get("/activities")
 async def list_activities(limit: int = 50, ctx: dict = Depends(require_workspace)):
+    limit = clamp_limit(limit, default=50, maximum=100)
     docs = await db.activities.find(
         workspace_query(ctx), {"_id": 0}
     ).sort("created_at", -1).to_list(limit)
     uids = list({d["actor_id"] for d in docs})
-    users = await db.users.find({"id": {"$in": uids}}, {"_id": 0, "password": 0}).to_list(500)
+    users = await db.users.find({"id": {"$in": uids}}, {"_id": 0, "password": 0}).to_list(100)
     umap = {u["id"]: u for u in users}
     for d in docs:
         d["actor"] = umap.get(d["actor_id"], {"name": "System"})
@@ -940,7 +1096,8 @@ async def call_claude(system: str, user_msg: str) -> str:
     return str(resp)
 
 @api.post("/ai/score-lead/{lid}")
-async def ai_score_lead(lid: str, ctx: dict = Depends(require_perm("ai", "use"))):
+@limiter.limit("60/minute")
+async def ai_score_lead(request: Request, lid: str, ctx: dict = Depends(require_perm("ai", "use"))):
     lead = await db.leads.find_one(workspace_query(ctx, {"id": lid}), {"_id": 0})
     if not lead:
         raise HTTPException(404, "Lead not found")
@@ -1013,7 +1170,7 @@ async def ai_summarize_customer(cid: str, ctx: dict = Depends(require_perm("ai",
         raise HTTPException(500, f"AI error: {e}")
     return {"summary": summary}
 @api.get("/ai/sales-forecast")
-async def ai_sales_forecast(ctx: dict = Depends(require_workspace)):
+async def ai_sales_forecast(ctx: dict = Depends(require_perm("ai", "use"))):
     wid = ctx["workspace_id"]
     pipeline = await db.deals.aggregate([
         {"$match": {"workspace_id": wid}},
@@ -1194,10 +1351,14 @@ async def mark_all_read(ctx: dict = Depends(require_workspace)):
 
 # ----------- Global Search -----------
 @api.get("/search")
-async def global_search(q: str, ctx: dict = Depends(require_workspace)):
-    if not q or len(q) < 1:
+@limiter.limit("120/minute")
+async def global_search(request: Request, q: str, ctx: dict = Depends(require_workspace)):
+    q = (q or "").strip()
+    if len(q) < 2:
         return {"customers": [], "leads": [], "deals": []}
-    rx = {"$regex": q, "$options": "i"}
+    if len(q) > 100:
+        raise HTTPException(400, "Search query too long")
+    rx = {"$regex": escape_regex(q), "$options": "i"}
     wq = {"workspace_id": ctx["workspace_id"]}
     customers = await db.customers.find(
         {**wq, "$or": [{"name": rx}, {"email": rx}, {"company": rx}]}, {"_id": 0}
@@ -1285,12 +1446,16 @@ async def billing_checkout(body: CheckoutRequestIn, ctx: dict = Depends(require_
 
 
 @api.get("/payments/status/{session_id}")
-async def payment_status(session_id: str):
-    record = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+async def payment_status(session_id: str, ctx: dict = Depends(require_workspace)):
+    # Only expose the record if it belongs to the caller's current workspace.
+    record = await db.payment_transactions.find_one(
+        {"session_id": session_id, "workspace_id": ctx["workspace_id"]},
+        {"_id": 0}
+    )
     if not record:
         raise HTTPException(404, "Transaction not found")
-    # Ask Stripe directly if still pending
-    if record.get("payment_status") != "paid":
+    # Only owner/admin (billing.manage) can trigger the Stripe status re-check.
+    if record.get("payment_status") != "paid" and can(ctx["role"], "billing", "view"):
         try:
             from emergentintegrations.payments.stripe.checkout import StripeCheckout
             checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=f"{APP_URL}/api/webhook/stripe")
@@ -1423,16 +1588,20 @@ def _next_ticket_number(seq: int) -> str:
 
 
 @api.get("/tickets")
-async def list_tickets(status_filter: Optional[str] = None,
+async def list_tickets(status_filter: Optional[str] = None, page: int = 1, limit: int = 100,
                        ctx: dict = Depends(require_perm("ticket", "view"))):
+    limit = clamp_limit(limit, default=100, maximum=100)
+    skip = clamp_skip(page, limit)
     q = workspace_query(ctx)
     if status_filter:
         q["status"] = status_filter
-    return await db.tickets.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return await db.tickets.find(q, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
 
 
 @api.post("/tickets")
 async def create_ticket(body: TicketIn, ctx: dict = Depends(require_perm("ticket", "create"))):
+    await ensure_customer_in_workspace(body.customer_id, ctx["workspace_id"])
+    await ensure_assignee_in_workspace(body.assignee_id, ctx["workspace_id"])
     count = await db.tickets.count_documents({"workspace_id": ctx["workspace_id"]})
     doc = {
         "id": new_id(),
@@ -1466,6 +1635,8 @@ async def get_ticket(tid: str, ctx: dict = Depends(require_perm("ticket", "view"
 
 @api.put("/tickets/{tid}")
 async def update_ticket(tid: str, body: TicketIn, ctx: dict = Depends(require_perm("ticket", "edit"))):
+    await ensure_customer_in_workspace(body.customer_id, ctx["workspace_id"])
+    await ensure_assignee_in_workspace(body.assignee_id, ctx["workspace_id"])
     before = await db.tickets.find_one(workspace_query(ctx, {"id": tid}), {"_id": 0})
     if not before:
         raise HTTPException(404, "Not found")
@@ -1502,6 +1673,7 @@ async def ticket_stats(ctx: dict = Depends(require_perm("ticket", "view"))):
 # ----------- Audit log viewer -----------
 @api.get("/audit-logs")
 async def list_audit_logs(limit: int = 100, ctx: dict = Depends(require_perm("audit_log", "view"))):
+    limit = clamp_limit(limit, default=100, maximum=200)
     docs = await db.audit_logs.find(workspace_query(ctx), {"_id": 0}).sort("created_at", -1).to_list(limit)
     return docs
 
@@ -1571,7 +1743,8 @@ async def _gather_ai_context(workspace_id: str, focus_type: Optional[str] = None
 
 
 @api.post("/ai/copilot")
-async def ai_copilot(body: CopilotIn, ctx: dict = Depends(require_perm("ai", "use"))):
+@limiter.limit("60/minute")
+async def ai_copilot(request: Request, body: CopilotIn, ctx: dict = Depends(require_perm("ai", "use"))):
     ctx_snapshot = await _gather_ai_context(ctx["workspace_id"], body.context_type, body.context_id)
     system = (
         "You are NexusCRM Sales Copilot — an expert B2B sales analyst embedded in a live CRM. "
@@ -1622,7 +1795,8 @@ def _infer_mapping(headers: List[str], entity: str) -> dict:
 
 
 @api.post("/import/preview")
-async def import_preview(body: ImportPreviewIn, ctx: dict = Depends(require_workspace)):
+@limiter.limit("120/hour")
+async def import_preview(request: Request, body: ImportPreviewIn, ctx: dict = Depends(require_workspace)):
     if body.entity == "lead" and not can(ctx["role"], "lead", "create"):
         raise HTTPException(403, "Missing permission: lead.create")
     if body.entity == "customer" and not can(ctx["role"], "customer", "create"):
@@ -1639,7 +1813,8 @@ async def import_preview(body: ImportPreviewIn, ctx: dict = Depends(require_work
 
 
 @api.post("/import/execute")
-async def import_execute(body: ImportExecuteIn, ctx: dict = Depends(require_workspace)):
+@limiter.limit("30/hour")
+async def import_execute(request: Request, body: ImportExecuteIn, ctx: dict = Depends(require_workspace)):
     if body.entity == "lead" and not can(ctx["role"], "lead", "create"):
         raise HTTPException(403, "Missing permission: lead.create")
     if body.entity == "customer" and not can(ctx["role"], "customer", "create"):
@@ -1820,10 +1995,24 @@ async def list_workflows(ctx: dict = Depends(require_perm("settings", "manage"))
     return await db.workflows.find(workspace_query(ctx), {"_id": 0}).sort("created_at", -1).to_list(100)
 
 
+async def _validate_workflow_action_targets(actions: List["WorkflowActionIn"], workspace_id: str) -> None:
+    """Ensure any user_id / assignee_id referenced by a workflow action belongs to this workspace."""
+    for a in actions:
+        params = a.params or {}
+        uid = params.get("user_id") or params.get("assignee_id")
+        if uid:
+            m = await db.memberships.find_one(
+                {"user_id": uid, "workspace_id": workspace_id}, {"_id": 1}
+            )
+            if not m:
+                raise HTTPException(400, "Workflow action references a user outside this workspace")
+
+
 @api.post("/workflows")
 async def create_workflow(body: WorkflowIn, ctx: dict = Depends(require_perm("settings", "manage"))):
     if body.trigger not in WORKFLOW_TRIGGERS:
         raise HTTPException(400, "Invalid trigger")
+    await _validate_workflow_action_targets(body.actions, ctx["workspace_id"])
     doc = {
         "id": new_id(),
         "workspace_id": ctx["workspace_id"],
@@ -1842,6 +2031,7 @@ async def create_workflow(body: WorkflowIn, ctx: dict = Depends(require_perm("se
 
 @api.put("/workflows/{wid}")
 async def update_workflow(wid: str, body: WorkflowIn, ctx: dict = Depends(require_perm("settings", "manage"))):
+    await _validate_workflow_action_targets(body.actions, ctx["workspace_id"])
     r = await db.workflows.update_one(
         workspace_query(ctx, {"id": wid}),
         {"$set": {**body.model_dump(), "updated_at": now_iso()}},
@@ -1863,13 +2053,55 @@ async def delete_workflow(wid: str, ctx: dict = Depends(require_perm("settings",
 
 # Mount
 app.include_router(api)
+
+# CORS — restrict to explicit origins. Never wildcard when credentials are allowed.
+_raw_origins = os.environ.get('CORS_ORIGINS', '')
+_origins = [o.strip() for o in _raw_origins.split(',') if o.strip() and o.strip() != '*']
+if not _origins:
+    # Sensible default if misconfigured: only allow the configured APP_URL and local dev.
+    _origins = [u for u in [APP_URL, "http://localhost:3000"] if u]
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_origins,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Workspace-Id"],
 )
+
+
+@app.on_event("startup")
+async def _create_indexes():
+    """Create indexes for common workspace-scoped queries. Safe to run repeatedly."""
+    try:
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("id", unique=True)
+        await db.memberships.create_index([("workspace_id", 1), ("user_id", 1)], unique=True)
+        await db.memberships.create_index("user_id")
+        await db.workspaces.create_index("id", unique=True)
+        await db.customers.create_index([("workspace_id", 1), ("created_at", -1)])
+        await db.customers.create_index([("workspace_id", 1), ("id", 1)])
+        await db.customers.create_index([("workspace_id", 1), ("email", 1)])
+        await db.leads.create_index([("workspace_id", 1), ("created_at", -1)])
+        await db.leads.create_index([("workspace_id", 1), ("id", 1)])
+        await db.leads.create_index([("workspace_id", 1), ("status", 1)])
+        await db.deals.create_index([("workspace_id", 1), ("stage", 1)])
+        await db.deals.create_index([("workspace_id", 1), ("id", 1)])
+        await db.deals.create_index([("workspace_id", 1), ("created_at", -1)])
+        await db.tasks.create_index([("workspace_id", 1), ("status", 1)])
+        await db.tasks.create_index([("workspace_id", 1), ("assignee_id", 1)])
+        await db.tickets.create_index([("workspace_id", 1), ("status", 1)])
+        await db.tickets.create_index([("workspace_id", 1), ("id", 1)])
+        await db.notes.create_index([("workspace_id", 1), ("related_type", 1), ("related_id", 1)])
+        await db.activities.create_index([("workspace_id", 1), ("created_at", -1)])
+        await db.notifications.create_index([("workspace_id", 1), ("user_id", 1), ("read", 1)])
+        await db.audit_logs.create_index([("workspace_id", 1), ("created_at", -1)])
+        await db.workflows.create_index([("workspace_id", 1), ("trigger", 1), ("enabled", 1)])
+        await db.payment_transactions.create_index([("workspace_id", 1), ("session_id", 1)])
+        await db.payment_transactions.create_index("session_id", unique=True)
+        await db.invites.create_index([("workspace_id", 1), ("email", 1)])
+    except Exception:
+        logging.exception("Index creation failed (continuing).")
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("nexuscrm")

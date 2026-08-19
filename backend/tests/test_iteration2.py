@@ -246,7 +246,8 @@ def test_44_checkout_rejects_free_plan(sess):
 
 
 def test_45_payments_status(sess):
-    r = sess.get(f"{API}/payments/status/{state['session_id']}")
+    r = sess.get(f"{API}/payments/status/{state['session_id']}",
+                 headers=H(state["owner_token"], state["ws_id"]))
     assert r.status_code == 200
     d = r.json()
     assert d["session_id"] == state["session_id"]
@@ -254,5 +255,11 @@ def test_45_payments_status(sess):
 
 
 def test_46_payments_status_unknown_session(sess):
-    r = sess.get(f"{API}/payments/status/nonexistent-session-id")
+    r = sess.get(f"{API}/payments/status/nonexistent-session-id",
+                 headers=H(state["owner_token"], state["ws_id"]))
     assert r.status_code == 404
+
+
+def test_47_payments_status_requires_auth(sess):
+    r = sess.get(f"{API}/payments/status/{state['session_id']}")
+    assert r.status_code in (401, 422)

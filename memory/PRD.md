@@ -20,6 +20,74 @@ Multi-tenant SaaS CRM where companies create their own workspace and manage cust
 ## Multi-tenancy model
 Every entity carries `workspace_id`. Requests require `X-Workspace-Id` header + JWT. Membership lookup enforces role-based access.
 
+## Delivered (2026-02) — Iteration 5 (Security Hardening)
+
+### Tenant Isolation
+- All CRUD endpoints already scoped via `workspace_query(ctx)`; audited every route
+- Added `ensure_customer_in_workspace`, `ensure_deal_in_workspace`, `ensure_lead_in_workspace`, `ensure_related_in_workspace`, `ensure_assignee_in_workspace` helpers
+- Every referenced `customer_id` / `assignee_id` / `related_id` in Deal, Task, Ticket, Note create/update is validated against the caller's workspace → cross-tenant reference attacks return 400
+- Workflow action `user_id`/`assignee_id` params validated at workflow create/update
+
+### RBAC audit
+- `require_perm(resource, action)` enforced at backend for every endpoint (never trust frontend)
+- Fixed `/ai/sales-forecast` — was `require_workspace`, now `require_perm("ai", "use")`
+- Added `require_perm("customer","edit")` audit logging on customer update/delete
+- Added activity + audit log on lead update/delete, deal update/delete, customer update/delete
+
+### Payment security
+- `GET /payments/status/{session_id}` was UNAUTHENTICATED → now requires JWT + `X-Workspace-Id` and returns the record ONLY if it belongs to the caller's workspace
+- Stripe status re-check gated behind `billing.view` permission
+
+### Search security
+- User query fed to `$regex` was UNESCAPED (ReDoS / regex injection risk) → now `re.escape()`
+- Search min length ≥ 2, max 100 chars
+- Rate-limited to 120/min
+
+### Invitations
+- Invites are now single-use — accepting an already-accepted invite returns 400
+- JWT-signed invite tokens with 7-day expiry (preserved)
+
+### Rate limiting (slowapi, per-IP)
+- Signup: 60/hour · Login: 30/min · Invite: 60/hour · AI copilot: 60/min · AI score: 60/min
+- Search: 120/min · Import preview: 120/hour · Import execute: 30/hour
+- Toggle via `RATE_LIMIT_ENABLED=0` in env for dev / test isolation
+
+### CORS
+- Removed `allow_origins=*`; now uses explicit `CORS_ORIGINS` env (comma-separated). Falls back to `APP_URL + localhost:3000`
+- Allowed headers restricted to `Authorization`, `Content-Type`, `X-Workspace-Id`
+- Allowed methods restricted to `GET/POST/PUT/PATCH/DELETE/OPTIONS`
+
+### Error handling
+- Generic global handler — no more stack traces to clients. All uncaught exceptions return `{"detail":"Internal server error"}` with 500
+- Rate-limit exceptions return 429 with a friendly message
+
+### Audit logging
+- Added: `login_success`, `login_failed` (email only, no passwords/tokens ever logged)
+- Added: customer/lead/deal update+delete activities and customer update/delete audit rows
+
+### Database indexes (created on startup)
+- `users(email unique, id unique)` · `memberships(workspace_id, user_id) unique` + `user_id`
+- `workspaces.id unique` · `customers(workspace_id, created_at desc)` + `(workspace_id, id)` + `(workspace_id, email)`
+- `leads(workspace_id, created_at desc)` + `(workspace_id, id)` + `(workspace_id, status)`
+- `deals(workspace_id, stage)` + `(workspace_id, id)` + `(workspace_id, created_at desc)`
+- `tasks(workspace_id, status)` + `(workspace_id, assignee_id)`
+- `tickets(workspace_id, status)` + `(workspace_id, id)` · `notes(workspace_id, related_type, related_id)`
+- `activities(workspace_id, created_at desc)` · `notifications(workspace_id, user_id, read)`
+- `audit_logs(workspace_id, created_at desc)` · `workflows(workspace_id, trigger, enabled)`
+- `payment_transactions(workspace_id, session_id)` + `session_id unique`
+- `invites(workspace_id, email)`
+
+### Pagination
+- All list endpoints (`/customers`, `/leads`, `/deals`, `/tasks`, `/tickets`) support `?page=&limit=`; limit hard-capped at 100 (default 100)
+- Activities capped at 100, audit-logs at 200, notes at 100
+
+### Tests
+- Added `/app/backend/tests/test_security.py` (22 tests) covering all 11 checklist items
+- Fixed 3 stale pre-existing tests in `backend_test.py` (`pipeline_stages` length, invite verification, ai `reasons` vs `reason`)
+- Added 1 new test in `test_iteration2.py` for payments auth
+- **All 134 tests passing (1 rate-limit test skipped when env disables limiter)**
+
+
 ## Delivered (2026-02) — Iteration 4 (Import + Automation)
 
 ### CSV Import Wizard
