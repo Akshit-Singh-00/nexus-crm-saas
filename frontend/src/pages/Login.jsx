@@ -44,7 +44,7 @@ export default function Login() {
         </div>
       </div>
 
-      <div className="flex items-center justify-center p-8">
+      <div className="flex items-center justify-center p-8 text-neutral-900">
         <form onSubmit={onSubmit} className="w-full max-w-sm space-y-6" data-testid="login-form">
           <div>
             <h1 className="font-heading text-3xl">Welcome back</h1>
@@ -55,11 +55,13 @@ export default function Login() {
             <div>
               <Label htmlFor="email">Email</Label>
               <Input id="email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required
+                     placeholder="name@company.com" autoComplete="email"
                      className="rounded-sm mt-1.5" data-testid="login-email" />
             </div>
             <div>
               <Label htmlFor="pw">Password</Label>
               <Input id="pw" type="password" value={password} onChange={e=>setPassword(e.target.value)} required
+                     placeholder="••••••••" autoComplete="current-password"
                      className="rounded-sm mt-1.5" data-testid="login-password" />
             </div>
           </div>

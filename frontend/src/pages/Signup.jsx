@@ -43,7 +43,7 @@ export default function Signup() {
         <div className="text-[10px] font-mono-data uppercase tracking-widest text-neutral-500">Free · 14-day trial</div>
       </div>
 
-      <div className="flex items-center justify-center p-8">
+      <div className="flex items-center justify-center p-8 text-neutral-900">
         <form onSubmit={onSubmit} className="w-full max-w-sm space-y-6" data-testid="signup-form">
           <div>
             <h1 className="font-heading text-3xl">Create your account</h1>
@@ -54,16 +54,19 @@ export default function Signup() {
             <div>
               <Label htmlFor="name">Full name</Label>
               <Input id="name" value={name} onChange={e=>setName(e.target.value)} required
+                     placeholder="John Doe" autoComplete="name"
                      className="rounded-sm mt-1.5" data-testid="signup-name" />
             </div>
             <div>
               <Label htmlFor="email">Work email</Label>
               <Input id="email" type="email" value={email} onChange={e=>setEmail(e.target.value)} required
+                     placeholder="name@company.com" autoComplete="email"
                      className="rounded-sm mt-1.5" data-testid="signup-email" />
             </div>
             <div>
               <Label htmlFor="pw">Password</Label>
               <Input id="pw" type="password" value={password} onChange={e=>setPassword(e.target.value)} required minLength={6}
+                     placeholder="••••••••" autoComplete="new-password"
                      className="rounded-sm mt-1.5" data-testid="signup-password" />
               <p className="text-xs text-neutral-500 mt-1">Minimum 6 characters</p>
             </div>
