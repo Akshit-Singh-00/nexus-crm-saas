@@ -9,7 +9,8 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Hexagon className="h-6 w-6 text-[#FF3823]" strokeWidth={2.5} />
-            <span className="font-heading text-xl">Nexus<span className="text-neutral-500">CRM</span></span>
+            {/* NexusCRM — AI-Powered Customer Relationship Management */}
+            <span className="font-heading text-xl" title="NexusCRM — AI-Powered Customer Relationship Management" aria-label="NexusCRM — AI-Powered Customer Relationship Management">Nexus<span className="text-neutral-500">CRM</span></span>
           </div>
           <div className="flex items-center gap-3">
             <Link to="/login" data-testid="landing-login" className="text-sm hover:underline">Sign in</Link>
