@@ -156,14 +156,19 @@ Leads receive:
 - Hot / Warm / Cold classification
 - Explainable business reasons
 
+
 Example:
 
 ```text
 Score: 87/100
 Classification: HOT
-
 Reasons:
 - High engagement
 - Strong company fit
 - Recent activity
 - High estimated value
+
+
+## Live Demo Link
+https://workspace-crm-6.preview.emergentagent.com
+
