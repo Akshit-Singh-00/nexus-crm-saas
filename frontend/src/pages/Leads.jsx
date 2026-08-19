@@ -20,10 +20,16 @@ const statusColors = {
   unqualified: "bg-red-100 text-red-800",
 };
 
-function ScoreBadge({ score }) {
-  if (score == null) return <span className="text-xs text-neutral-400 font-mono-data">—</span>;
-  const color = score >= 75 ? "text-green-700 bg-green-100" : score >= 50 ? "text-amber-700 bg-amber-100" : "text-red-700 bg-red-100";
-  return <span className={`inline-flex items-center px-2 py-0.5 rounded-sm text-xs font-mono-data ${color}`}>{score}</span>;
+function ScoreBadge({ score, classification }) {
+  if (score == null) return <span className="text-xs text-muted-foreground font-mono-data">—</span>;
+  const cls = classification || (score >= 75 ? "hot" : score >= 50 ? "warm" : "cold");
+  const color = cls === "hot" ? "text-red-700 bg-red-100" : cls === "warm" ? "text-amber-700 bg-amber-100" : "text-blue-700 bg-blue-100";
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-xs font-mono-data ${color}`}>
+      <span className="font-semibold">{score}</span>
+      <span className="uppercase text-[9px]">{cls}</span>
+    </span>
+  );
 }
 
 export default function Leads() {
@@ -141,7 +147,7 @@ export default function Leads() {
                 <TableCell className="text-muted-foreground">{r.company || "—"}</TableCell>
                 <TableCell><Badge className={`${statusColors[r.status]} hover:${statusColors[r.status]} rounded-sm border-0`}>{r.status}</Badge></TableCell>
                 <TableCell className="font-mono-data text-xs">${Number(r.value||0).toLocaleString()}</TableCell>
-                <TableCell><ScoreBadge score={r.score} /></TableCell>
+                <TableCell><ScoreBadge score={r.score} classification={r.classification} /></TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1 justify-end">
                     <Button size="sm" variant="ghost" onClick={() => score(r.id)} disabled={scoringId === r.id}

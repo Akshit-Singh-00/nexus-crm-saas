@@ -108,6 +108,64 @@ def require_role(*roles: str):
         return ctx
     return _dep
 
+
+# ----------- Permission Matrix (RBAC 2.0) -----------
+# Backwards-compatible: keeps existing role names, adds `manager` and `support`.
+ROLES = ("owner", "admin", "manager", "member", "support", "viewer")
+ROLE_LABELS = {
+    "owner": "Super Admin",
+    "admin": "Organization Admin",
+    "manager": "Sales Manager",
+    "member": "Sales Representative",
+    "support": "Support Agent",
+    "viewer": "Viewer",
+}
+
+# resource -> action -> set(role)
+PERMISSIONS: dict = {
+    "customer":     {"view": {"owner","admin","manager","member","support","viewer"}, "create": {"owner","admin","manager","member"}, "edit": {"owner","admin","manager","member"}, "delete": {"owner","admin"}, "assign": {"owner","admin","manager"}},
+    "lead":         {"view": {"owner","admin","manager","member","viewer"},           "create": {"owner","admin","manager","member"}, "edit": {"owner","admin","manager","member"}, "delete": {"owner","admin"}, "assign": {"owner","admin","manager"}},
+    "deal":         {"view": {"owner","admin","manager","member","viewer"},           "create": {"owner","admin","manager","member"}, "edit": {"owner","admin","manager","member"}, "delete": {"owner","admin"}, "assign": {"owner","admin","manager"}},
+    "task":         {"view": {"owner","admin","manager","member","support","viewer"}, "create": {"owner","admin","manager","member","support"}, "edit": {"owner","admin","manager","member","support"}, "delete": {"owner","admin","manager","member","support"}},
+    "note":         {"view": {"owner","admin","manager","member","support","viewer"}, "create": {"owner","admin","manager","member","support"}},
+    "ticket":       {"view": {"owner","admin","manager","support","viewer"},           "create": {"owner","admin","manager","support","member"}, "edit": {"owner","admin","manager","support"}, "delete": {"owner","admin"}, "assign": {"owner","admin","manager","support"}},
+    "settings":     {"view": {"owner","admin","manager"}, "manage": {"owner","admin"}},
+    "audit_log":    {"view": {"owner","admin"}},
+    "billing":      {"view": {"owner","admin"}, "manage": {"owner"}},
+    "member":       {"view": {"owner","admin","manager","member","support","viewer"}, "invite": {"owner","admin"}, "manage": {"owner","admin"}},
+    "ai":           {"use":  {"owner","admin","manager","member","support"}},
+    "report":       {"view": {"owner","admin","manager","viewer"}, "export": {"owner","admin","manager"}},
+}
+
+
+def can(role: str, resource: str, action: str) -> bool:
+    return role in PERMISSIONS.get(resource, {}).get(action, set())
+
+
+def require_perm(resource: str, action: str):
+    async def _dep(ctx: dict = Depends(require_workspace)):
+        if not can(ctx["role"], resource, action):
+            raise HTTPException(403, f"Missing permission: {resource}.{action}")
+        return ctx
+    return _dep
+
+
+# ----------- Audit Log -----------
+async def audit(ctx: dict, action: str, resource: str, resource_id: str,
+                before: Optional[dict] = None, after: Optional[dict] = None):
+    await db.audit_logs.insert_one({
+        "id": new_id(),
+        "workspace_id": ctx["workspace_id"],
+        "user_id": ctx["user"]["id"],
+        "user_email": ctx["user"].get("email"),
+        "action": action,
+        "resource": resource,
+        "resource_id": resource_id,
+        "before": before,
+        "after": after,
+        "created_at": now_iso(),
+    })
+
 # ----------- Models -----------
 class SignupIn(BaseModel):
     email: EmailStr
@@ -124,12 +182,21 @@ class WorkspaceIn(BaseModel):
 
 class InviteIn(BaseModel):
     email: EmailStr
-    role: Literal["admin", "member", "viewer"] = "member"
+    role: Literal["admin", "manager", "member", "support", "viewer"] = "member"
     send_email: bool = False
 
 class InviteAcceptIn(BaseModel):
     password: str = Field(min_length=6)
     name: Optional[str] = None
+
+class MemberRoleIn(BaseModel):
+    role: Literal["admin", "manager", "member", "support", "viewer"]
+
+class WorkspaceSettingsIn(BaseModel):
+    name: Optional[str] = None
+    logo_url: Optional[str] = None
+    industry: Optional[str] = None
+    pipeline_stages: Optional[List[dict]] = None  # [{id, label, color, probability}]
 
 class CustomerIn(BaseModel):
     name: str
@@ -152,12 +219,30 @@ class DealIn(BaseModel):
     title: str
     customer_id: Optional[str] = None
     value: float = 0
-    stage: Literal["lead", "qualified", "proposal", "negotiation", "won", "lost"] = "lead"
+    stage: str = "lead"
     assignee_id: Optional[str] = None
     close_date: Optional[str] = None
+    probability: int = Field(default=25, ge=0, le=100)
+    priority: Literal["low", "medium", "high"] = "medium"
+    tags: List[str] = []
+    description: Optional[str] = ""
 
 class DealStageUpdate(BaseModel):
-    stage: Literal["lead", "qualified", "proposal", "negotiation", "won", "lost"]
+    stage: str
+
+class TicketIn(BaseModel):
+    subject: str
+    description: Optional[str] = ""
+    customer_id: Optional[str] = None
+    priority: Literal["low", "medium", "high", "urgent"] = "medium"
+    status: Literal["open", "in_progress", "waiting", "resolved", "closed"] = "open"
+    assignee_id: Optional[str] = None
+    tags: List[str] = []
+
+class CopilotIn(BaseModel):
+    message: str
+    context_type: Optional[str] = None  # customer/lead/deal
+    context_id: Optional[str] = None
 
 class TaskIn(BaseModel):
     title: str
@@ -236,6 +321,17 @@ async def me(user: dict = Depends(current_user)):
     ]
     return {"user": user, "workspaces": result_ws}
 
+DEFAULT_PIPELINE_STAGES = [
+    {"id": "lead",        "label": "Lead",        "color": "#94a3b8", "probability": 10},
+    {"id": "qualified",   "label": "Qualified",   "color": "#0047FF", "probability": 25},
+    {"id": "demo",        "label": "Demo",        "color": "#7c3aed", "probability": 40},
+    {"id": "proposal",    "label": "Proposal",    "color": "#0036CC", "probability": 60},
+    {"id": "negotiation", "label": "Negotiation", "color": "#0A0A0A", "probability": 80},
+    {"id": "won",         "label": "Won",         "color": "#10b981", "probability": 100},
+    {"id": "lost",        "label": "Lost",        "color": "#FF3823", "probability": 0},
+]
+
+
 # ----------- Workspaces -----------
 @api.post("/workspaces")
 async def create_workspace(body: WorkspaceIn, user: dict = Depends(current_user)):
@@ -246,6 +342,8 @@ async def create_workspace(body: WorkspaceIn, user: dict = Depends(current_user)
         "industry": body.industry,
         "owner_id": user["id"],
         "plan": "starter",
+        "logo_url": None,
+        "pipeline_stages": DEFAULT_PIPELINE_STAGES,
         "created_at": now_iso(),
     }
     await db.workspaces.insert_one(workspace)
@@ -275,7 +373,7 @@ async def list_members(ctx: dict = Depends(require_workspace)):
     ]
 
 @api.post("/workspaces/invite")
-async def invite_member(body: InviteIn, ctx: dict = Depends(require_role("owner", "admin"))):
+async def invite_member(body: InviteIn, ctx: dict = Depends(require_perm("member", "invite"))):
     # Create signed invite token (7 days)
     workspace = await db.workspaces.find_one({"id": ctx["workspace_id"]}, {"_id": 0})
     token_payload = {
@@ -387,7 +485,7 @@ def workspace_query(ctx: dict, extra: dict = None) -> dict:
 
 # ----------- Customers -----------
 @api.get("/customers")
-async def list_customers(search: str = "", ctx: dict = Depends(require_workspace)):
+async def list_customers(search: str = "", ctx: dict = Depends(require_perm("customer", "view"))):
     q = workspace_query(ctx)
     if search:
         q["$or"] = [
@@ -399,7 +497,7 @@ async def list_customers(search: str = "", ctx: dict = Depends(require_workspace
     return docs
 
 @api.post("/customers")
-async def create_customer(body: CustomerIn, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def create_customer(body: CustomerIn, ctx: dict = Depends(require_perm("customer", "create"))):
     doc = {
         "id": new_id(),
         "workspace_id": ctx["workspace_id"],
@@ -414,14 +512,14 @@ async def create_customer(body: CustomerIn, ctx: dict = Depends(require_role("ow
     return doc
 
 @api.get("/customers/{cid}")
-async def get_customer(cid: str, ctx: dict = Depends(require_workspace)):
+async def get_customer(cid: str, ctx: dict = Depends(require_perm("customer", "view"))):
     doc = await db.customers.find_one(workspace_query(ctx, {"id": cid}), {"_id": 0})
     if not doc:
         raise HTTPException(404, "Not found")
     return doc
 
 @api.put("/customers/{cid}")
-async def update_customer(cid: str, body: CustomerIn, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def update_customer(cid: str, body: CustomerIn, ctx: dict = Depends(require_perm("customer", "edit"))):
     r = await db.customers.update_one(
         workspace_query(ctx, {"id": cid}),
         {"$set": {**body.model_dump(), "updated_at": now_iso()}},
@@ -432,7 +530,7 @@ async def update_customer(cid: str, body: CustomerIn, ctx: dict = Depends(requir
     return {"ok": True}
 
 @api.delete("/customers/{cid}")
-async def delete_customer(cid: str, ctx: dict = Depends(require_role("owner", "admin"))):
+async def delete_customer(cid: str, ctx: dict = Depends(require_perm("customer", "delete"))):
     r = await db.customers.delete_one(workspace_query(ctx, {"id": cid}))
     if not r.deleted_count:
         raise HTTPException(404, "Not found")
@@ -441,7 +539,7 @@ async def delete_customer(cid: str, ctx: dict = Depends(require_role("owner", "a
 
 # ----------- Leads -----------
 @api.get("/leads")
-async def list_leads(search: str = "", ctx: dict = Depends(require_workspace)):
+async def list_leads(search: str = "", ctx: dict = Depends(require_perm("lead", "view"))):
     q = workspace_query(ctx)
     if search:
         q["$or"] = [
@@ -452,7 +550,7 @@ async def list_leads(search: str = "", ctx: dict = Depends(require_workspace)):
     return await db.leads.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 @api.post("/leads")
-async def create_lead(body: LeadIn, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def create_lead(body: LeadIn, ctx: dict = Depends(require_perm("lead", "create"))):
     doc = {
         "id": new_id(),
         "workspace_id": ctx["workspace_id"],
@@ -469,7 +567,7 @@ async def create_lead(body: LeadIn, ctx: dict = Depends(require_role("owner", "a
     return doc
 
 @api.put("/leads/{lid}")
-async def update_lead(lid: str, body: LeadIn, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def update_lead(lid: str, body: LeadIn, ctx: dict = Depends(require_perm("lead", "edit"))):
     r = await db.leads.update_one(
         workspace_query(ctx, {"id": lid}),
         {"$set": {**body.model_dump(), "updated_at": now_iso()}},
@@ -479,19 +577,59 @@ async def update_lead(lid: str, body: LeadIn, ctx: dict = Depends(require_role("
     return {"ok": True}
 
 @api.delete("/leads/{lid}")
-async def delete_lead(lid: str, ctx: dict = Depends(require_role("owner", "admin"))):
+async def delete_lead(lid: str, ctx: dict = Depends(require_perm("lead", "delete"))):
     r = await db.leads.delete_one(workspace_query(ctx, {"id": lid}))
     if not r.deleted_count:
         raise HTTPException(404, "Not found")
     return {"ok": True}
 
+# ----------- Deal risk detection -----------
+def _compute_deal_risk(deal: dict) -> dict:
+    """Compute deal risk based on activity age, close date and stage."""
+    if deal.get("stage") in ("won", "lost"):
+        return {"level": "none", "reasons": []}
+    reasons = []
+    now = datetime.now(timezone.utc)
+    try:
+        updated = datetime.fromisoformat(deal.get("updated_at", "").replace("Z", "+00:00"))
+        days_since = (now - updated).days
+    except Exception:
+        days_since = 0
+    if days_since >= 7:
+        reasons.append(f"No activity for {days_since} days")
+    close_date = deal.get("close_date")
+    if close_date:
+        try:
+            cd = datetime.fromisoformat(close_date)
+            if cd.tzinfo is None:
+                cd = cd.replace(tzinfo=timezone.utc)
+            days_to_close = (cd - now).days
+            if days_to_close < 0 and deal.get("stage") not in ("won", "lost"):
+                reasons.append(f"Overdue by {-days_to_close} days")
+            elif 0 <= days_to_close <= 5 and deal.get("stage") not in ("negotiation", "proposal"):
+                reasons.append(f"Close date in {days_to_close} days but not in negotiation")
+        except Exception:
+            pass
+    if deal.get("stage") == "proposal" and days_since >= 5:
+        reasons.append("Proposal without follow-up")
+    if deal.get("probability", 0) < 20 and days_since >= 3:
+        reasons.append("Low probability with stale activity")
+    if not reasons:
+        return {"level": "none", "reasons": []}
+    level = "high" if len(reasons) >= 2 or days_since >= 14 else "medium"
+    return {"level": level, "reasons": reasons}
+
+
 # ----------- Deals -----------
 @api.get("/deals")
-async def list_deals(ctx: dict = Depends(require_workspace)):
-    return await db.deals.find(workspace_query(ctx), {"_id": 0}).sort("created_at", -1).to_list(500)
+async def list_deals(ctx: dict = Depends(require_perm("deal", "view"))):
+    deals = await db.deals.find(workspace_query(ctx), {"_id": 0}).sort("created_at", -1).to_list(500)
+    for d in deals:
+        d["risk"] = _compute_deal_risk(d)
+    return deals
 
 @api.post("/deals")
-async def create_deal(body: DealIn, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def create_deal(body: DealIn, ctx: dict = Depends(require_perm("deal", "create"))):
     doc = {
         "id": new_id(),
         "workspace_id": ctx["workspace_id"],
@@ -506,7 +644,7 @@ async def create_deal(body: DealIn, ctx: dict = Depends(require_role("owner", "a
     return doc
 
 @api.put("/deals/{did}")
-async def update_deal(did: str, body: DealIn, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def update_deal(did: str, body: DealIn, ctx: dict = Depends(require_perm("deal", "edit"))):
     r = await db.deals.update_one(
         workspace_query(ctx, {"id": did}),
         {"$set": {**body.model_dump(), "updated_at": now_iso()}},
@@ -516,7 +654,7 @@ async def update_deal(did: str, body: DealIn, ctx: dict = Depends(require_role("
     return {"ok": True}
 
 @api.patch("/deals/{did}/stage")
-async def update_deal_stage(did: str, body: DealStageUpdate, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def update_deal_stage(did: str, body: DealStageUpdate, ctx: dict = Depends(require_perm("deal", "edit"))):
     r = await db.deals.update_one(
         workspace_query(ctx, {"id": did}),
         {"$set": {"stage": body.stage, "updated_at": now_iso()}},
@@ -536,7 +674,7 @@ async def update_deal_stage(did: str, body: DealStageUpdate, ctx: dict = Depends
     return {"ok": True}
 
 @api.delete("/deals/{did}")
-async def delete_deal(did: str, ctx: dict = Depends(require_role("owner", "admin"))):
+async def delete_deal(did: str, ctx: dict = Depends(require_perm("deal", "delete"))):
     r = await db.deals.delete_one(workspace_query(ctx, {"id": did}))
     if not r.deleted_count:
         raise HTTPException(404, "Not found")
@@ -544,14 +682,14 @@ async def delete_deal(did: str, ctx: dict = Depends(require_role("owner", "admin
 
 # ----------- Tasks -----------
 @api.get("/tasks")
-async def list_tasks(status_filter: Optional[str] = None, ctx: dict = Depends(require_workspace)):
+async def list_tasks(status_filter: Optional[str] = None, ctx: dict = Depends(require_perm("task", "view"))):
     q = workspace_query(ctx)
     if status_filter:
         q["status"] = status_filter
     return await db.tasks.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 @api.post("/tasks")
-async def create_task(body: TaskIn, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def create_task(body: TaskIn, ctx: dict = Depends(require_perm("task", "create"))):
     doc = {
         "id": new_id(),
         "workspace_id": ctx["workspace_id"],
@@ -576,7 +714,7 @@ async def create_task(body: TaskIn, ctx: dict = Depends(require_role("owner", "a
     return doc
 
 @api.put("/tasks/{tid}")
-async def update_task(tid: str, body: TaskIn, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def update_task(tid: str, body: TaskIn, ctx: dict = Depends(require_perm("task", "edit"))):
     r = await db.tasks.update_one(
         workspace_query(ctx, {"id": tid}),
         {"$set": {**body.model_dump(), "updated_at": now_iso()}},
@@ -586,7 +724,7 @@ async def update_task(tid: str, body: TaskIn, ctx: dict = Depends(require_role("
     return {"ok": True}
 
 @api.delete("/tasks/{tid}")
-async def delete_task(tid: str, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def delete_task(tid: str, ctx: dict = Depends(require_perm("task", "delete"))):
     r = await db.tasks.delete_one(workspace_query(ctx, {"id": tid}))
     if not r.deleted_count:
         raise HTTPException(404, "Not found")
@@ -606,7 +744,7 @@ async def list_notes(related_type: str, related_id: str, ctx: dict = Depends(req
     return docs
 
 @api.post("/notes")
-async def create_note(body: NoteIn, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def create_note(body: NoteIn, ctx: dict = Depends(require_perm("note", "create"))):
     doc = {
         "id": new_id(),
         "workspace_id": ctx["workspace_id"],
@@ -639,20 +777,30 @@ async def analytics_overview(ctx: dict = Depends(require_workspace)):
     total_leads = await db.leads.count_documents({"workspace_id": wid})
     total_deals = await db.deals.count_documents({"workspace_id": wid})
     open_tasks = await db.tasks.count_documents({"workspace_id": wid, "status": {"$ne": "done"}})
+    open_tickets = await db.tickets.count_documents({"workspace_id": wid, "status": {"$nin": ["resolved", "closed"]}})
 
-    # pipeline value by stage
+    # Pipeline: use workspace stages
+    workspace = await db.workspaces.find_one({"id": wid}, {"_id": 0})
+    stages = workspace.get("pipeline_stages") or DEFAULT_PIPELINE_STAGES
+    stage_ids = [s["id"] for s in stages]
+    stage_prob = {s["id"]: s.get("probability", 50) for s in stages}
+
     pipeline = await db.deals.aggregate([
         {"$match": {"workspace_id": wid}},
         {"$group": {"_id": "$stage", "value": {"$sum": "$value"}, "count": {"$sum": 1}}},
-    ]).to_list(20)
-    stages = ["lead", "qualified", "proposal", "negotiation", "won", "lost"]
+    ]).to_list(50)
     stage_map = {p["_id"]: p for p in pipeline}
     by_stage = [
-        {"stage": s, "value": stage_map.get(s, {}).get("value", 0), "count": stage_map.get(s, {}).get("count", 0)}
+        {
+            "stage": s["id"],
+            "label": s["label"],
+            "color": s.get("color", "#0047FF"),
+            "value": stage_map.get(s["id"], {}).get("value", 0),
+            "count": stage_map.get(s["id"], {}).get("count", 0),
+        }
         for s in stages
     ]
 
-    # leads by status
     leads_agg = await db.leads.aggregate([
         {"$match": {"workspace_id": wid}},
         {"$group": {"_id": "$status", "count": {"$sum": 1}}},
@@ -660,7 +808,54 @@ async def analytics_overview(ctx: dict = Depends(require_workspace)):
     leads_by_status = [{"status": p["_id"], "count": p["count"]} for p in leads_agg]
 
     won_value = stage_map.get("won", {}).get("value", 0)
-    total_pipeline = sum(p["value"] for p in pipeline if p["_id"] not in ("lost",))
+    won_count = stage_map.get("won", {}).get("count", 0)
+    lost_count = stage_map.get("lost", {}).get("count", 0)
+    total_closed = won_count + lost_count
+    win_rate = round((won_count / total_closed) * 100, 1) if total_closed else 0.0
+    avg_deal_size = round(won_value / won_count, 2) if won_count else 0.0
+
+    # Weighted pipeline: for each open deal, value * probability (stage or deal)
+    open_deals = await db.deals.find(
+        {"workspace_id": wid, "stage": {"$nin": ["won", "lost"]}},
+        {"_id": 0}
+    ).to_list(1000)
+    weighted = 0.0
+    committed = 0.0  # deals with probability >= 90
+    best_case = 0.0  # deals with probability >= 60
+    for d in open_deals:
+        prob = d.get("probability") if d.get("probability") is not None else stage_prob.get(d.get("stage"), 50)
+        v = float(d.get("value") or 0)
+        weighted += v * (prob / 100.0)
+        if prob >= 90:
+            committed += v
+        if prob >= 60:
+            best_case += v
+    total_pipeline = sum(d.get("value") or 0 for d in open_deals)
+    forecast = weighted + won_value
+
+    # Sales cycle: avg days from created_at to updated_at for won deals
+    won_deals = await db.deals.find({"workspace_id": wid, "stage": "won"}, {"_id": 0}).to_list(500)
+    cycle_days = 0.0
+    if won_deals:
+        total_days = 0
+        n = 0
+        for d in won_deals:
+            try:
+                c = datetime.fromisoformat(d["created_at"].replace("Z", "+00:00"))
+                u = datetime.fromisoformat(d["updated_at"].replace("Z", "+00:00"))
+                total_days += (u - c).days
+                n += 1
+            except Exception:
+                pass
+        cycle_days = round(total_days / n, 1) if n else 0.0
+
+    # At-risk deals
+    at_risk = []
+    for d in open_deals:
+        r = _compute_deal_risk(d)
+        if r["level"] in ("medium", "high"):
+            at_risk.append({**d, "risk": r})
+    at_risk.sort(key=lambda x: (x["risk"]["level"] == "high", x.get("value") or 0), reverse=True)
 
     return {
         "totals": {
@@ -668,11 +863,27 @@ async def analytics_overview(ctx: dict = Depends(require_workspace)):
             "leads": total_leads,
             "deals": total_deals,
             "open_tasks": open_tasks,
+            "open_tickets": open_tickets,
             "won_value": won_value,
             "pipeline_value": total_pipeline,
         },
+        "forecast": {
+            "committed": round(committed, 2),
+            "best_case": round(best_case, 2),
+            "pipeline": round(total_pipeline, 2),
+            "weighted": round(weighted, 2),
+            "forecast": round(forecast, 2),
+        },
+        "kpis": {
+            "win_rate": win_rate,
+            "avg_deal_size": avg_deal_size,
+            "sales_cycle_days": cycle_days,
+            "won_count": won_count,
+            "lost_count": lost_count,
+        },
         "pipeline_by_stage": by_stage,
         "leads_by_status": leads_by_status,
+        "at_risk_deals": at_risk[:10],
     }
 
 # ----------- AI -----------
@@ -687,12 +898,13 @@ async def call_claude(system: str, user_msg: str) -> str:
     return str(resp)
 
 @api.post("/ai/score-lead/{lid}")
-async def ai_score_lead(lid: str, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def ai_score_lead(lid: str, ctx: dict = Depends(require_perm("ai", "use"))):
     lead = await db.leads.find_one(workspace_query(ctx, {"id": lid}), {"_id": 0})
     if not lead:
         raise HTTPException(404, "Lead not found")
     system = ("You are a B2B sales analyst. Score the lead 0-100 for likelihood to convert. "
-              "Return STRICT JSON: {\"score\": <int>, \"reason\": \"<1-2 sentence rationale>\"}. No other text.")
+              "Return STRICT JSON: {\"score\": <int>, \"classification\": \"hot\"|\"warm\"|\"cold\", "
+              "\"reasons\": [\"<3-5 short bullet reasons>\"]}. No other text.")
     profile = (
         f"Name: {lead.get('name')}\n"
         f"Email: {lead.get('email')}\n"
@@ -706,22 +918,33 @@ async def ai_score_lead(lid: str, ctx: dict = Depends(require_role("owner", "adm
     except Exception as e:
         logging.exception("AI scoring failed")
         raise HTTPException(500, f"AI error: {e}")
-    import json, re
+    import json
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
         raise HTTPException(500, "AI did not return JSON")
-    data = json.loads(m.group(0))
+    try:
+        data = json.loads(m.group(0))
+    except Exception:
+        raise HTTPException(500, "AI returned malformed JSON")
     score = int(data.get("score", 0))
-    reason = data.get("reason", "")
+    reasons = data.get("reasons") or ([data["reason"]] if data.get("reason") else [])
+    classification = data.get("classification") or ("hot" if score >= 75 else "warm" if score >= 50 else "cold")
     await db.leads.update_one(
         workspace_query(ctx, {"id": lid}),
-        {"$set": {"score": score, "score_reason": reason, "updated_at": now_iso()}},
+        {"$set": {
+            "score": score,
+            "score_reason": " · ".join(reasons) if isinstance(reasons, list) else str(reasons),
+            "score_reasons": reasons if isinstance(reasons, list) else [str(reasons)],
+            "classification": classification,
+            "scored_at": now_iso(),
+            "updated_at": now_iso(),
+        }},
     )
     await log_activity(ctx["workspace_id"], ctx["user"]["id"], "ai_scored", "lead", lid, {"score": score})
-    return {"score": score, "reason": reason}
+    return {"score": score, "classification": classification, "reasons": reasons}
 
 @api.post("/ai/summarize-customer/{cid}")
-async def ai_summarize_customer(cid: str, ctx: dict = Depends(require_role("owner", "admin", "member"))):
+async def ai_summarize_customer(cid: str, ctx: dict = Depends(require_perm("ai", "use"))):
     customer = await db.customers.find_one(workspace_query(ctx, {"id": cid}), {"_id": 0})
     if not customer:
         raise HTTPException(404, "Customer not found")
@@ -1075,6 +1298,252 @@ async def stripe_webhook(request: Request):
 @api.get("/")
 async def root():
     return {"service": "NexusCRM", "status": "ok"}
+
+
+# ----------- Workspace settings -----------
+@api.get("/workspaces/settings")
+async def get_workspace_settings(ctx: dict = Depends(require_perm("settings", "view"))):
+    ws = await db.workspaces.find_one({"id": ctx["workspace_id"]}, {"_id": 0})
+    if not ws:
+        raise HTTPException(404, "Workspace not found")
+    if not ws.get("pipeline_stages"):
+        ws["pipeline_stages"] = DEFAULT_PIPELINE_STAGES
+    return ws
+
+
+@api.put("/workspaces/settings")
+async def update_workspace_settings(body: WorkspaceSettingsIn,
+                                    ctx: dict = Depends(require_perm("settings", "manage"))):
+    update = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "pipeline_stages" in update:
+        seen_ids = set()
+        for s in update["pipeline_stages"]:
+            if not s.get("id") or not s.get("label"):
+                raise HTTPException(400, "Each stage needs id and label")
+            if s["id"] in seen_ids:
+                raise HTTPException(400, f"Duplicate stage id: {s['id']}")
+            seen_ids.add(s["id"])
+    if not update:
+        return {"ok": True}
+    before = await db.workspaces.find_one({"id": ctx["workspace_id"]}, {"_id": 0, "password": 0})
+    await db.workspaces.update_one({"id": ctx["workspace_id"]},
+                                   {"$set": {**update, "updated_at": now_iso()}})
+    await audit(ctx, "updated", "workspace", ctx["workspace_id"],
+                before={k: before.get(k) for k in update.keys()},
+                after=update)
+    return {"ok": True}
+
+
+@api.patch("/workspaces/members/{user_id}/role")
+async def update_member_role(user_id: str, body: MemberRoleIn,
+                             ctx: dict = Depends(require_perm("member", "manage"))):
+    # Cannot change your own role or the owner role
+    target = await db.memberships.find_one(
+        {"workspace_id": ctx["workspace_id"], "user_id": user_id}, {"_id": 0}
+    )
+    if not target:
+        raise HTTPException(404, "Member not found")
+    if target["role"] == "owner":
+        raise HTTPException(403, "Cannot change the owner's role")
+    if user_id == ctx["user"]["id"]:
+        raise HTTPException(403, "Cannot change your own role")
+    await db.memberships.update_one(
+        {"workspace_id": ctx["workspace_id"], "user_id": user_id},
+        {"$set": {"role": body.role}},
+    )
+    await audit(ctx, "role_changed", "member", user_id,
+                before={"role": target["role"]}, after={"role": body.role})
+    return {"ok": True}
+
+
+@api.delete("/workspaces/members/{user_id}")
+async def remove_member(user_id: str, ctx: dict = Depends(require_perm("member", "manage"))):
+    target = await db.memberships.find_one(
+        {"workspace_id": ctx["workspace_id"], "user_id": user_id}, {"_id": 0}
+    )
+    if not target:
+        raise HTTPException(404, "Member not found")
+    if target["role"] == "owner":
+        raise HTTPException(403, "Cannot remove the owner")
+    if user_id == ctx["user"]["id"]:
+        raise HTTPException(403, "Cannot remove yourself")
+    await db.memberships.delete_one({"workspace_id": ctx["workspace_id"], "user_id": user_id})
+    await audit(ctx, "removed", "member", user_id, before=target)
+    return {"ok": True}
+
+
+# ----------- Support Tickets -----------
+def _next_ticket_number(seq: int) -> str:
+    return f"TKT-{seq:05d}"
+
+
+@api.get("/tickets")
+async def list_tickets(status_filter: Optional[str] = None,
+                       ctx: dict = Depends(require_perm("ticket", "view"))):
+    q = workspace_query(ctx)
+    if status_filter:
+        q["status"] = status_filter
+    return await db.tickets.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@api.post("/tickets")
+async def create_ticket(body: TicketIn, ctx: dict = Depends(require_perm("ticket", "create"))):
+    count = await db.tickets.count_documents({"workspace_id": ctx["workspace_id"]})
+    doc = {
+        "id": new_id(),
+        "workspace_id": ctx["workspace_id"],
+        "number": _next_ticket_number(count + 1),
+        "created_by": ctx["user"]["id"],
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        **body.model_dump(),
+    }
+    await db.tickets.insert_one(doc)
+    await audit(ctx, "created", "ticket", doc["id"], after={"subject": body.subject})
+    if body.assignee_id and body.assignee_id != ctx["user"]["id"]:
+        await create_notification(
+            workspace_id=ctx["workspace_id"], user_id=body.assignee_id,
+            title=f"Ticket {doc['number']} assigned",
+            body=f"{ctx['user']['name']} assigned you a ticket: {body.subject}",
+            kind="ticket_assigned", entity_type="ticket", entity_id=doc["id"],
+        )
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/tickets/{tid}")
+async def get_ticket(tid: str, ctx: dict = Depends(require_perm("ticket", "view"))):
+    doc = await db.tickets.find_one(workspace_query(ctx, {"id": tid}), {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    return doc
+
+
+@api.put("/tickets/{tid}")
+async def update_ticket(tid: str, body: TicketIn, ctx: dict = Depends(require_perm("ticket", "edit"))):
+    before = await db.tickets.find_one(workspace_query(ctx, {"id": tid}), {"_id": 0})
+    if not before:
+        raise HTTPException(404, "Not found")
+    await db.tickets.update_one(
+        workspace_query(ctx, {"id": tid}),
+        {"$set": {**body.model_dump(), "updated_at": now_iso()}},
+    )
+    changed = {k: body.model_dump().get(k) for k in body.model_dump() if before.get(k) != body.model_dump().get(k)}
+    await audit(ctx, "updated", "ticket", tid,
+                before={k: before.get(k) for k in changed}, after=changed)
+    return {"ok": True}
+
+
+@api.delete("/tickets/{tid}")
+async def delete_ticket(tid: str, ctx: dict = Depends(require_perm("ticket", "delete"))):
+    before = await db.tickets.find_one(workspace_query(ctx, {"id": tid}), {"_id": 0})
+    r = await db.tickets.delete_one(workspace_query(ctx, {"id": tid}))
+    if not r.deleted_count:
+        raise HTTPException(404, "Not found")
+    await audit(ctx, "deleted", "ticket", tid, before=before)
+    return {"ok": True}
+
+
+@api.get("/tickets/stats/overview")
+async def ticket_stats(ctx: dict = Depends(require_perm("ticket", "view"))):
+    wid = ctx["workspace_id"]
+    open_ = await db.tickets.count_documents({"workspace_id": wid, "status": {"$nin": ["resolved", "closed"]}})
+    resolved = await db.tickets.count_documents({"workspace_id": wid, "status": "resolved"})
+    high_pri = await db.tickets.count_documents({"workspace_id": wid, "priority": {"$in": ["high", "urgent"]}, "status": {"$nin": ["resolved", "closed"]}})
+    total = await db.tickets.count_documents({"workspace_id": wid})
+    return {"open": open_, "resolved": resolved, "high_priority": high_pri, "total": total}
+
+
+# ----------- Audit log viewer -----------
+@api.get("/audit-logs")
+async def list_audit_logs(limit: int = 100, ctx: dict = Depends(require_perm("audit_log", "view"))):
+    docs = await db.audit_logs.find(workspace_query(ctx), {"_id": 0}).sort("created_at", -1).to_list(limit)
+    return docs
+
+
+# ----------- AI Sales Copilot -----------
+async def _gather_ai_context(workspace_id: str, focus_type: Optional[str] = None, focus_id: Optional[str] = None) -> str:
+    """Aggregate a compact CRM snapshot for the AI copilot."""
+    now = datetime.now(timezone.utc)
+    ws = await db.workspaces.find_one({"id": workspace_id}, {"_id": 0})
+    stages = ws.get("pipeline_stages") or DEFAULT_PIPELINE_STAGES
+    stage_map = {s["id"]: s.get("probability", 50) for s in stages}
+
+    # Deals summary
+    deals = await db.deals.find({"workspace_id": workspace_id}, {"_id": 0}).to_list(200)
+    open_deals = [d for d in deals if d.get("stage") not in ("won", "lost")]
+    won_deals = [d for d in deals if d.get("stage") == "won"]
+    at_risk = []
+    for d in open_deals:
+        r = _compute_deal_risk(d)
+        if r["level"] in ("medium", "high"):
+            at_risk.append({**d, "risk": r})
+    at_risk.sort(key=lambda x: (x["risk"]["level"] == "high", x.get("value") or 0), reverse=True)
+
+    # Leads (top 10 by score if any, else recent)
+    leads = await db.leads.find({"workspace_id": workspace_id}, {"_id": 0}).to_list(200)
+    scored = [l for l in leads if l.get("score") is not None]
+    top_leads = sorted(scored, key=lambda l: l["score"] or 0, reverse=True)[:5] if scored else leads[:5]
+
+    tasks = await db.tasks.find({"workspace_id": workspace_id, "status": {"$ne": "done"}}, {"_id": 0}).sort("due_date", 1).to_list(10)
+
+    lines = [f"=== WORKSPACE: {ws.get('name')} (industry: {ws.get('industry') or 'n/a'}) ==="]
+    lines.append(f"Pipeline stages: {', '.join(s['id'] for s in stages)}")
+    lines.append(f"\n[DEALS] total={len(deals)} open={len(open_deals)} won={len(won_deals)}")
+    for d in open_deals[:12]:
+        prob = d.get("probability") or stage_map.get(d.get("stage"), 50)
+        lines.append(f"  - {d.get('title')} | stage={d.get('stage')} | ${d.get('value',0):,.0f} | prob={prob}% | close={d.get('close_date') or '—'}")
+
+    if at_risk:
+        lines.append(f"\n[AT-RISK] ({len(at_risk)})")
+        for d in at_risk[:6]:
+            lines.append(f"  - {d.get('title')} | ${d.get('value',0):,.0f} | risk={d['risk']['level']} | reasons: {'; '.join(d['risk']['reasons'])}")
+
+    lines.append(f"\n[TOP LEADS]")
+    for l in top_leads:
+        lines.append(f"  - {l.get('name')} ({l.get('company') or '—'}) score={l.get('score','?')} status={l.get('status')} value=${l.get('value',0):,.0f}")
+
+    lines.append(f"\n[OPEN TASKS] ({len(tasks)})")
+    for t in tasks[:6]:
+        lines.append(f"  - {t.get('title')} | priority={t.get('priority')} | due={t.get('due_date') or '—'}")
+
+    # Focused entity
+    if focus_type and focus_id:
+        coll = {"customer": db.customers, "lead": db.leads, "deal": db.deals}.get(focus_type)
+        if coll is not None:
+            entity = await coll.find_one({"workspace_id": workspace_id, "id": focus_id}, {"_id": 0})
+            if entity:
+                notes = await db.notes.find(
+                    {"workspace_id": workspace_id, "related_type": focus_type, "related_id": focus_id},
+                    {"_id": 0}
+                ).sort("created_at", -1).to_list(20)
+                lines.append(f"\n[FOCUSED {focus_type.upper()}] {entity}")
+                if notes:
+                    lines.append(f"[NOTES]")
+                    for n in notes[:10]:
+                        lines.append(f"  - {n['content']}")
+    return "\n".join(lines)
+
+
+@api.post("/ai/copilot")
+async def ai_copilot(body: CopilotIn, ctx: dict = Depends(require_perm("ai", "use"))):
+    ctx_snapshot = await _gather_ai_context(ctx["workspace_id"], body.context_type, body.context_id)
+    system = (
+        "You are NexusCRM Sales Copilot — an expert B2B sales analyst embedded in a live CRM. "
+        "You are given a snapshot of the user's workspace: deals, leads, tasks, at-risk deals, notes. "
+        "Respond concisely and specifically using ONLY the data provided. When suggesting actions, name the actual deal/lead by title. "
+        "Format: short bullet points or 1-3 short paragraphs. No markdown headers. When drafting emails, keep them under 150 words and professional. "
+        "If the user asks about data that isn't in the snapshot, say what's missing and suggest how to record it."
+    )
+    prompt = (
+        f"USER QUESTION:\n{body.message}\n\n"
+        f"CRM SNAPSHOT:\n{ctx_snapshot}\n"
+    )
+    try:
+        answer = await call_claude(system, prompt)
+    except Exception as e:
+        raise HTTPException(500, f"Copilot error: {e}")
+    return {"answer": answer}
 
 
 # Mount

@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 3 backend: 36/36 pytest cases passed for RBAC 2.0 (viewer/support/manager permissions), workspace member role/remove with owner/self guards, workspace settings + custom pipeline stages (with duplicate-id rejection), deal enhancements (probability/priority/tags/description/close_date/assignee) + backend risk detection, /api/analytics/overview shape (totals, forecast, kpis, pipeline_by_stage w/ label+color, leads_by_status, at_risk_deals), tickets CRUD with auto TKT-##### numbering + stats overview + delete-admin-only, audit log admin-only + entries recorded for settings/role/ticket ops, AI copilot returns non-empty answer (Claude 4.6) and 403 for viewer, AI lead scoring returns {score,classification,reasons[]} and persists, cross-tenant isolation blocked. Frontend Playwright: Dashboard renders 4 forecast cards + 3 sales KPI cards + Open tickets KPI, /app/deals create dialog exposes probability/priority/tags/close/assignee/description fields and card renders correctly, /app/settings loads for owner with 7 default stages, Add stage adds a row (after scroll), Save pipeline persists; /app/tickets creates a ticket with TKT- number and 4 stats cards; /app/audit shows audit rows; Copilot drawer opens via topbar button, sends query, receives Claude response referencing risk/data; /app/customers/:id shows all 5 tabs (overview/deals/tasks/notes/activity); Team page shows member-role select + remove trash icon.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/customers, /api/leads, /api/deals, /api/tasks, /api/notes", "issue": "These endpoints still use `require_role('owner','admin','member')` which contradicts the declared PERMISSIONS matrix. Per the matrix, `manager` should be able to create customers/leads/deals/tasks/notes and `support` should be able to create customers/tasks/notes. Currently manager & support get 403 on those creates. Recommend switching each of those create/edit/delete handlers to `require_perm(resource, action)` for consistency with the matrix used by tickets/settings/audit_log/copilot."},
+      {"endpoint": "PATCH /api/deals/{id}/stage, PUT /api/deals/{id}, DELETE /api/deals/{id}", "issue": "Same inconsistency — uses hard-coded role list instead of require_perm('deal', 'edit'|'delete'). Manager cannot move a deal to another stage today."},
+      {"endpoint": "GET /api/customers, /api/leads, /api/tasks, /api/notes, /api/activities, /api/analytics/overview, /api/search, /api/notifications", "issue": "Use `require_workspace` only (no permission check). This is currently fine because 'view' includes all 6 roles for most resources, but it means the matrix is authoritative-in-name-only. Consider wiring `require_perm(resource,'view')` for defense-in-depth (e.g. viewer today can list leads and deals, which is intended per matrix, but nothing enforces removals of that permission from viewer if you change the matrix later)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Settings > Pipeline stages", "issues": ["The color input renders as a native OS color picker (browser default). Fine functionally but not shadcn-consistent. Not blocking."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/test_reports/pytest/iter3_results.xml"
+  ],
+  "action_items": [
+    "Replace remaining `require_role(...)` decorators in server.py customer/lead/deal/task/note create/edit handlers with `require_perm(resource, action)` so the declared PERMISSIONS matrix is actually enforced (manager currently 403 on POST /api/customers|leads|deals|tasks, and cannot PATCH deal stage — likely a regression vs. the intended RBAC 2.0 spec).",
+    "Optional: switch list endpoints to use require_perm(resource,'view') for defense-in-depth."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1562 lines — split into routers/ (auth, workspaces, invites, customers, leads, deals, tasks, notes, tickets, analytics, ai, billing, audit) for maintainability.",
+    "PERMISSIONS matrix declared but only partially enforced. Customer/lead/deal/task/note handlers still use the legacy `require_role('owner','admin','member')` — either drop the matrix from those, or (preferred) route all guards through require_perm for a single source of truth.",
+    "_compute_deal_risk parses updated_at with .replace('Z','+00:00') but our now_iso() already emits +00:00, so parsing works — but a deal with a naive/non-ISO string would silently default days_since=0 (masking risk). Consider logging exceptions.",
+    "ai_copilot & ai_score_lead have no timeout / retry on Claude call — a slow model can block a worker up to httpx default. Consider wrapping call_claude in an asyncio.wait_for(...) with a bound.",
+    "json.loads in ai_score_lead can raise if model returns invalid JSON (regex captures {...} but content may still be malformed). Wrap in try/except -> HTTPException(500).",
+    "get_workspace_settings returns raw workspace doc which may include stripe_subscription_id — fine, but consider projecting only the fields the settings UI needs.",
+    "DEFAULT_PIPELINE_STAGES is defined between `/auth/me` and `/workspaces` routes — cosmetic; move to top of file with other constants.",
+    "Tickets number is derived from count_documents(workspace) which is not race-safe under concurrency (two concurrent POSTs can collide). Consider a Mongo $inc counter on workspaces or a unique index on (workspace_id, number)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py (new)",
+    "/app/test_reports/iteration_3.json (new)"
+  ],
+  "success_rate": {"backend": "100% (36/36 iteration-3 tests)", "frontend": "100% of scripted iteration-3 flows"},
+  "test_credentials": "Demo owner: demo@nexus.com / demo1234. Backend tests spin up fresh owner + one invitee per role per run.",
+  "seed_data_creation": "Backend suite creates a new workspace with 5 invitees (admin/manager/member/support/viewer) per run. Frontend Playwright created TEST_UI_Deal, TEST_UI_Ticket_v2 and added one extra pipeline stage against Acme Inc.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter-3 suite lives at /app/backend/tests/test_iteration3.py. It creates a fresh workspace + 5 invitees per run so it is idempotent. RBAC gaps: server.py customer/lead/deal/task/note handlers still gate on require_role legacy tuple — the PERMISSIONS matrix is only actually enforced for tickets, settings, audit_log, member management, ai and reports. When re-testing after main-agent fixes, add manager/support positive-case tests for POST /api/customers,leads,deals,tasks and PATCH /api/deals/{id}/stage.",
+  "rca of the issue": "N/A — no blocking bugs. Only inconsistency is that the new PERMISSIONS matrix in server.py:125 is not applied to the older CRUD endpoints (customers/leads/deals/tasks/notes) which continue to use the legacy require_role tuple. This is why the review-request line 'a manager can create/update tickets but NOT deals' passes today (support cannot create deals — correct), but the flip side 'manager should be able to work with deals/customers/leads' would fail if tested positively."
+}

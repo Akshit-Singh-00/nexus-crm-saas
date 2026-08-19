@@ -20,6 +20,57 @@ Multi-tenant SaaS CRM where companies create their own workspace and manage cust
 ## Multi-tenancy model
 Every entity carries `workspace_id`. Requests require `X-Workspace-Id` header + JWT. Membership lookup enforces role-based access.
 
+## Delivered (2026-02) — Iteration 3 (Professional SaaS polish)
+
+### Enhanced RBAC (6 roles + permission matrix)
+- Roles: owner (Super Admin), admin (Org Admin), manager (Sales Manager), member (Sales Rep), support (Support Agent), viewer
+- Declarative `PERMISSIONS[resource][action] → set(roles)` + `require_perm(resource, action)` FastAPI dependency
+- **All CRUD endpoints wired through `require_perm`** (customers, leads, deals, tasks, notes, tickets, settings, audit_log, member management, ai). Legacy `require_role` fully retired from resource endpoints — the matrix is now the single source of truth.
+- Team page allows admins to change teammate role and remove members (owner protected)
+
+### Deal enhancements + custom pipeline stages + risk detection
+- Deal: added `probability`, `priority`, `tags`, `description`, `assignee_id`, `expected close_date`
+- Workspace `pipeline_stages` (id, label, color, probability). Editable via Settings.
+- Kanban cards show assignee, probability chip, priority, tags, close date, risk banner
+- `_compute_deal_risk()` flags deals: idle 7+ days, overdue close, stale proposal, low prob + stale
+- Deal card highlights risk with left border colour + reasons
+
+### Advanced analytics (upgraded /api/analytics/overview)
+- Revenue forecast cards: **Committed / Best case / Pipeline / Weighted forecast**
+- Sales KPIs: **Win rate · Avg deal size · Sales cycle days**
+- At-risk deals section with click-through to pipeline
+- Open tickets KPI included
+
+### AI Sales Copilot (`POST /api/ai/copilot`)
+- Slide-out drawer (⌘J) with suggestion prompts + free-form chat
+- Backend gathers live CRM snapshot (deals, at-risk, top-scored leads, open tasks) and passes to Claude 4.6
+- Answers reference actual deal/lead titles from the workspace
+
+### Enhanced AI lead scoring
+- Now returns `{score, classification (hot/warm/cold), reasons[]}` and persists all fields
+- Score badge shows both numeric score + classification
+
+### Support Tickets module (new)
+- Full CRUD, per-ticket status transitions inline, priority, per-workspace `TKT-#####` numbering
+- Stats KPIs: Open · High priority · Resolved · Total
+- Assignee notifications on creation
+- `/api/tickets`, `/api/tickets/stats/overview`
+
+### Workspace settings + logo
+- `GET/PUT /api/workspaces/settings` (permission-gated)
+- Settings page: workspace name, industry, logo URL preview, drag-orderable pipeline stages with colour picker + probability
+- Sidebar shows logo when set
+
+### Audit log
+- `audit_logs` collection with user, action, resource, before/after diff
+- Auto-logged on: settings changes, member role changes / removals, ticket create/update/delete
+- Admin-only viewer at `/app/audit`
+
+### Customer 360 upgrade
+- Tabs: Overview · Deals · Tasks · Notes · Activity
+- Health indicator, contact chips, deal count / total value in header
+- Cross-linked open deals and tasks per customer
+
 ## Delivered (2026-02) — Iteration 2
 
 ### Invite Acceptance

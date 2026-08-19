@@ -12,6 +12,9 @@ import Deals from "@/pages/Deals";
 import Tasks from "@/pages/Tasks";
 import Team from "@/pages/Team";
 import Billing from "@/pages/Billing";
+import Settings from "@/pages/Settings";
+import Tickets from "@/pages/Tickets";
+import AuditLog from "@/pages/AuditLog";
 import InviteAccept from "@/pages/InviteAccept";
 import CustomerDetail from "@/pages/CustomerDetail";
 import Landing from "@/pages/Landing";
@@ -52,6 +55,9 @@ function App() {
             <Route path="/app/tasks" element={<WithWorkspace><Tasks /></WithWorkspace>} />
             <Route path="/app/team" element={<WithWorkspace><Team /></WithWorkspace>} />
             <Route path="/app/billing" element={<WithWorkspace><Billing /></WithWorkspace>} />
+            <Route path="/app/tickets" element={<WithWorkspace><Tickets /></WithWorkspace>} />
+            <Route path="/app/settings" element={<WithWorkspace><Settings /></WithWorkspace>} />
+            <Route path="/app/audit" element={<WithWorkspace><AuditLog /></WithWorkspace>} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>
