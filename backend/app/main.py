@@ -17,10 +17,13 @@ from app.routers import (
     audit,
     auth,
     billing,
+    customer360,
     customers,
     deals,
     health,
     imports,
+    integrations,
+    interactions,
     leads,
     notes,
     notifications,
@@ -72,6 +75,9 @@ api.include_router(workflows.router)
 api.include_router(ai.router)
 api.include_router(billing.router)
 api.include_router(imports.router)
+api.include_router(interactions.router)
+api.include_router(integrations.router)
+api.include_router(customer360.router)
 app.include_router(api)
 
 

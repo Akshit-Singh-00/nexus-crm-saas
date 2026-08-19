@@ -20,6 +20,45 @@ Multi-tenant SaaS CRM where companies create their own workspace and manage cust
 ## Multi-tenancy model
 Every entity carries `workspace_id`. Requests require `X-Workspace-Id` header + JWT. Membership lookup enforces role-based access.
 
+## Delivered (2026-02) — Iteration 7 (Customer 360 Upgrade)
+
+### Backend
+- **New unified `interactions` collection** — one row per email / call / meeting / file. All rows carry `workspace_id`, optional `customer_id` + `deal_id`, and are validated against the tenant.
+- **New routers**
+  - `routers/interactions.py` — CRUD for `/emails`, `/calls`, `/meetings` (+ `PATCH /meetings/{id}/status`), `/files` (+ single-file download that returns `data_url`). 5 MB inline-upload cap.
+  - `routers/integrations.py` — `/integrations` list (returns not_connected|pending|connected for gmail/outlook/google_calendar), `POST /integrations/connect`, `DELETE /integrations/{provider}`. **No OAuth secrets stored** — connect endpoint marks provider `pending`; a signed OAuth callback would flip to `connected` in a follow-up.
+  - `routers/customer360.py` — `GET /customers/{id}/summary` (owner, totals, best lead score, last_activity, next_meeting) and `GET /customers/{id}/timeline` (unified chronological feed merging activities + notes + interactions + deal changes, deduped).
+- **New schemas** — `EmailLogIn`, `CallLogIn`, `MeetingIn`, `MeetingStatusIn`, `FileMetaIn`, `IntegrationConnectIn`.
+- **New indexes** on `interactions(workspace_id, kind, customer_id | deal_id | scheduled_at)` and `integrations(workspace_id, user_id, provider) unique`.
+- All 134 backend tests still pass.
+
+### Frontend — Customer 360 header
+- Health dot + name + company + email + phone
+- New: **Owner** (auto-derived from top open deal's assignee, falls back to creator)
+- New stat quartet: Status · Total value · Lead score · Last activity
+- New: **Next meeting** row (only shown if scheduled)
+- New: **Quick actions** — Email · Call · Meeting · Task · Note
+
+### Frontend — 10 tabs
+Overview · Deals · Tasks · Emails · Meetings · Calls · Tickets · Notes · Files · Activity.
+Each tab has an empty state; Emails and Meetings surface a hint card if the relevant provider is not connected.
+
+### Frontend — Unified timeline
+- Groups events by day
+- Icon per event type (email out/in, call, meeting scheduled/completed, file, note, generic activity)
+- Actor · type · description · time — matches the spec 1:1
+- Same component reused on the Overview tab (top 10) and Activity tab (all)
+
+### Integration architecture (safe)
+- Backend abstraction is real; **no fake emails are marked as "synced"**. Provider status stays `pending` until real OAuth is wired.
+- UI shows a "Not connected — logged emails/meetings stay in NexusCRM only" hint. This is honest and matches the spec's "do not pretend emails are synchronized".
+
+### Verified after upgrade
+- Signup / login / me / workspace switching
+- Customer / deal / lead / task / ticket CRUD still work
+- `/customers/{id}/timeline` deduped: 3 interactions → 4 events (customer creation + 3 interactions), no double-counting
+- 134/134 backend tests still pass
+
 ## Delivered (2026-02) — Iteration 5 (Security Hardening)
 
 ### Tenant Isolation
@@ -87,74 +126,6 @@ Every entity carries `workspace_id`. Requests require `X-Workspace-Id` header + 
 - Added 1 new test in `test_iteration2.py` for payments auth
 - **All 134 tests passing (1 rate-limit test skipped when env disables limiter)**
 
-
-## Delivered (2026-02) — Iteration 6 (Modular Refactor)
-
-### Backend architecture
-- Split the ~1900-line monolithic `server.py` into an `app/` package. `server.py` is now a 4-line shim that re-exports `app.main.app` so supervisor still runs `server:app`.
-- **61 `/api` routes preserved 1:1** — no path or contract changes.
-- **134 backend tests still pass** (1 rate-limit test skipped when env disables limiter).
-
-### New module layout
-```
-backend/
-  server.py                       # shim → from app.main import app
-  app/
-    main.py                       # FastAPI factory: middleware, routers, lifecycle
-    core/
-      config.py                   # env loader (MONGO_URL, JWT_SECRET, etc.)
-      database.py                 # Motor client + ensure_indexes()
-      security.py                 # hash_pw, verify_pw, make/decode_token
-      logging.py                  # setup_logging
-      rate_limit.py               # shared slowapi limiter
-    dependencies/
-      auth.py                     # bearer + current_user
-      tenant.py                   # get_membership + require_workspace
-      permissions.py              # ROLES, PERMISSIONS, can, require_perm, require_role
-    schemas/                      # 11 Pydantic input models split by domain
-    services/
-      audit_service.py            # audit(), log_activity(), audit_auth_event()
-      notification_service.py     # create_notification, notify_workspace
-      email_service.py            # send_email + safety scanner + templates
-      ai_service.py               # call_claude + gather_ai_context
-      workflow_service.py         # fire_workflows, validate_workflow_action_targets
-      deal_service.py             # compute_deal_risk + DEFAULT_PIPELINE_STAGES
-      billing_service.py          # PLANS + mark_paid
-      import_service.py           # CSV parse + column mapping
-    routers/                      # 18 thin routers (auth, workspaces, customers,
-                                  # leads, deals, tasks, notes, activities, analytics,
-                                  # search, notifications, tickets, audit, workflows,
-                                  # ai, billing, imports, health)
-    utils/
-      ids.py                      # new_id + now_iso
-      pagination.py               # clamp_limit + clamp_skip
-      tenant.py                   # escape_regex + ensure_*_in_workspace helpers
-```
-
-### Design principles honoured
-- **Thin routers**: authenticate → validate → call service → return. No business logic in routers.
-- **Services encapsulate side-effects**: workflow dispatch, notification writes, audit rows, Claude calls, email delivery, deal-risk maths.
-- **Dependencies do gatekeeping**: `require_workspace` and `require_perm` are re-used everywhere; no route duplicates auth checks.
-- **Utils are pure**: `escape_regex`, `clamp_limit`, `ensure_*_in_workspace` — reusable and side-effect-free.
-- No `models/` directory (Motor uses raw dicts + Pydantic input schemas → creating an ORM layer would be dead code).
-
-### Verified after refactor
-- Auth signup / login / me
-- Workspace create + switch + settings
-- Every CRUD path (customers, leads, deals, tasks, notes, tickets)
-- RBAC (viewer/support/member restrictions)
-- Tenant isolation (cross-workspace tests still green)
-- AI copilot / lead score / sales forecast permissions
-- Workflows dispatch on trigger
-- Billing checkout + Stripe webhook route + payment status
-- Global search + pagination
-- Frontend login page still renders as before
-
-### Remaining technical debt (future)
-- `analytics/overview` is still a single 100-line function — could split into `AnalyticsService.build_overview`
-- `imports/execute` mixes parsing + row insertion — could push more logic into `ImportService`
-- No response schemas — currently returning raw dicts; adding output models would tighten contracts
-- Consider APIRouter tags/prefixes per router for a nicer /docs page
 
 ## Delivered (2026-02) — Iteration 4 (Import + Automation)
 

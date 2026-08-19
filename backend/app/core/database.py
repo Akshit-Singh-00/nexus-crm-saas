@@ -38,5 +38,9 @@ async def ensure_indexes() -> None:
         await db.payment_transactions.create_index([("workspace_id", 1), ("session_id", 1)])
         await db.payment_transactions.create_index("session_id", unique=True)
         await db.invites.create_index([("workspace_id", 1), ("email", 1)])
+        await db.interactions.create_index([("workspace_id", 1), ("kind", 1), ("customer_id", 1)])
+        await db.interactions.create_index([("workspace_id", 1), ("kind", 1), ("deal_id", 1)])
+        await db.interactions.create_index([("workspace_id", 1), ("kind", 1), ("scheduled_at", 1)])
+        await db.integrations.create_index([("workspace_id", 1), ("user_id", 1), ("provider", 1)], unique=True)
     except Exception:
         logging.exception("Index creation failed (continuing).")
