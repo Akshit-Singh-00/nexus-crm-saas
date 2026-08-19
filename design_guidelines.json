@@ -1,0 +1,110 @@
+{
+  "theme": "light",
+  "mood": "Swiss & High-Contrast, Tactical Minimalism, Professional, Data-Dense",
+  "typography": {
+    "heading_font": "Cabinet Grotesk",
+    "body_font": "IBM Plex Sans",
+    "data_font": "IBM Plex Mono",
+    "rules": [
+      "Use 'Cabinet Grotesk' for all h1-h4 headings with tight tracking.",
+      "Use 'IBM Plex Sans' for all body text, tables, and UI text.",
+      "Use 'IBM Plex Mono' for numbers, IDs, and tabular data.",
+      "Do NOT use Inter, Roboto, Lato, Open Sans, or Space Grotesk."
+    ]
+  },
+  "colors": {
+    "background": "#F7F7F5",
+    "surface": "#FFFFFF",
+    "sidebar_bg": "#0A0A0A",
+    "sidebar_text": "#F7F7F5",
+    "primary": "#0047FF",
+    "primary_hover": "#0036CC",
+    "text_primary": "#0A0A0A",
+    "text_secondary": "#5C5C59",
+    "accent_ai": "#FF3823",
+    "accent_ai_bg": "#FFF0EE",
+    "border": "#E2E2E0",
+    "rules": [
+      "Avoid purple/violet-on-white AI slop entirely. Use accent_ai (Signal Red) for AI features to make them feel urgent and powerful.",
+      "Do not use generic teal (#1B93A4).",
+      "Sidebar must be stark dark (#0A0A0A) to ground the interface and contrast with the data canvas."
+    ]
+  },
+  "visual_enhancers": {
+    "borders": "Use 'Grid Borders' approach. Expose the skeleton for a technical, Swiss look. Use border-collapse patterns where appropriate.",
+    "shadows": "Sharp, non-muddy shadows. Use subtle crisp shadow-sm for cards. Never use massive fuzzy shadows.",
+    "textures": "Subtle noise overlay on the AI insights panel to differentiate it.",
+    "glassmorphism": "Use high opacity glassmorphism (bg-white/70 backdrop-blur-xl) for floating elements or sticky headers. NEVER use fully transparent backgrounds."
+  },
+  "component_name": {
+    "cards": "Flat, 1px border, 4px radius (rounded-sm).",
+    "buttons": "Sharp edges, solid background for primary, 1px border for secondary.",
+    "tables": "Dense Shadcn tables. Hover states on rows must ensure text remains high-contrast.",
+    "inputs": "Shadcn inputs. Focus state with crisp 2px ring of primary color.",
+    "ai_panels": "Subtle noise texture overlay, hard left-border (border-l-4) of accent_ai."
+  },
+  "grids": {
+    "dashboard_grid": "Bento-style dense grid. grid-cols-1 md:grid-cols-4 lg:grid-cols-12 with gap-4 or gap-6. Use col-span-full for full-width charts, col-span-4 for summary widgets."
+  },
+  "layouts": {
+    "sidebar": "Collapsible, tactical dark mode sidebar with white icons.",
+    "kanban_board": "Horizontal scrolling container with strict column widths (w-80 min-width). Cards within columns should have p-4, tight text.",
+    "spacing": "Generous inner padding for structural elements (p-6 or p-8 for cards), but tight spacing within data tables to maintain data density."
+  },
+  "motion": {
+    "rules": "Fast, precise, non-distracting. Transition effects should be 0.15s ease-out. No universal 'transition-all'."
+  },
+  "accessibility": {
+    "contrast": "Ensure text meets APCA standards. Normal text min 4.5:1, large text min 3:1.",
+    "focus": "Focus states must have HIGHER contrast than default state."
+  },
+  "media": {
+    "rules": "Images should primarily be user avatars and data-driven charts. No generic stock photos for dashboard functionality."
+  },
+  "3d_libraries": {
+    "recommendation": "Not required for core CRM data density. Focus purely on 2D Recharts for analytical precision. If interactive mapping is added later, use React Map GL."
+  },
+  "image_urls": {
+    "avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzB8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4NzA5OTM1OXww&ixlib=rb-4.1.0&q=85",
+        "description": "Female executive avatar"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzB8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4NzA5OTM1OXww&ixlib=rb-4.1.0&q=85",
+        "description": "Male manager avatar"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1609436132311-e4b0c9370469?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzB8MHwxfHNlYXJjaHw0fHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4NzA5OTM1OXww&ixlib=rb-4.1.0&q=85",
+        "description": "Female sales rep avatar"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzB8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4NzA5OTM1OXww&ixlib=rb-4.1.0&q=85",
+        "description": "Male sales rep avatar"
+      }
+    ]
+  },
+  "instructions_to_main_agent": "Use these avatar URLs for the team management view, customer profiles, and topbar user profile. Do not use random placeholder URLs. For logos, use Lucide icons (e.g., <Hexagon />) to look premium rather than relying on generic image logos. Share guidelines and write code exclusively for .js and .jsx files, never .tsx or .ts. The project uses JavaScript, not TypeScript. Build components from scratch using tailwind and react when Shadcn gets too tricky to install manually.",
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. In frontend design, this creates what users call the 'AI slop' aesthetic. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur).",
+    "You MUST NOT apply universal transition. Eg: transition: all. This results in breaking transforms. Always add transitions for specific interactive elements like button, input excluding transforms.",
+    "You MUST NOT center align the app container, ie do not add .App { text-align: center; } in the css file. This disrupts the human natural reading flow of text.",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations & color relevant to the app style.",
+    "NEVER: use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 etc for icons. Use lucide-react.",
+    "Every interaction needs micro-animations - hover states, transitions, parallax effects, and entrance animations. Static = dead.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Subtle grain textures, noise overlays, custom cursors, selection states, and loading animations: separates good from extraordinary.",
+    "Main agent relies on these image URLs. Missing categories (especially sponsor logos) = main agent will use placeholder text which is FORBIDDEN.",
+    "Prioritize using pre-existing components from src/components/ui when applicable.",
+    "Create new components that match the style and conventions of existing components when needed.",
+    "Examine existing components to understand the project's component patterns before creating new ones.",
+    "Use sonner for toasts. Sonner component are located in /app/src/components/ui/sonner.js.",
+    "CRITICAL: Share guidelines and write code exclusively for .js and .jsx files, never .tsx or .ts. The project uses JavaScript, not TypeScript.",
+    "CRITICAL: DO NOT use complete transparent background in header, overlays, any surface that has content under it.",
+    "All interactive and key informational elements MUST include a 'data-testid' attribute to facilitate robust automated testing. Convention: kebab-case, role-based."
+  ]
+}
