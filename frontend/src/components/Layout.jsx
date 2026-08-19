@@ -1,14 +1,18 @@
+import { useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { useTheme } from "@/context/ThemeContext";
 import {
-  LayoutDashboard, Users, Target, Kanban, CheckSquare, UsersRound,
-  LogOut, Hexagon, ChevronDown, Search
+  LayoutDashboard, Users, Target, Kanban, CheckSquare, UsersRound, Receipt,
+  LogOut, Hexagon, ChevronDown, Search, Sun, Moon,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
-  DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel
+  DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import CommandPalette from "@/components/CommandPalette";
+import NotificationsBell from "@/components/NotificationsBell";
 
 const nav = [
   { to: "/app", label: "Dashboard", icon: LayoutDashboard, exact: true },
@@ -17,19 +21,34 @@ const nav = [
   { to: "/app/deals", label: "Deals", icon: Kanban },
   { to: "/app/tasks", label: "Tasks", icon: CheckSquare },
   { to: "/app/team", label: "Team", icon: UsersRound },
+  { to: "/app/billing", label: "Billing", icon: Receipt },
 ];
 
 export default function Layout({ children }) {
   const { user, activeWorkspace, workspaces, switchWorkspace, logout } = useAuth();
+  const { theme, toggle } = useTheme();
   const nav_go = useNavigate();
+  const [cmdOpen, setCmdOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setCmdOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const doLogout = () => { logout(); nav_go("/login"); };
-
   const initials = (user?.name || user?.email || "?")
-    .split(" ").map(s => s[0]).slice(0,2).join("").toUpperCase();
+    .split(" ").map(s => s[0]).slice(0, 2).join("").toUpperCase();
 
   return (
-    <div className="min-h-screen flex bg-[#f7f7f5]">
+    <div className="min-h-screen flex bg-background text-foreground">
+      <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
+
       {/* Sidebar */}
       <aside className="w-64 bg-[#0A0A0A] text-[#f7f7f5] flex flex-col shrink-0" data-testid="app-sidebar">
         <div className="px-6 py-6 flex items-center gap-2">
@@ -54,12 +73,8 @@ export default function Layout({ children }) {
             <DropdownMenuLabel>Your workspaces</DropdownMenuLabel>
             <DropdownMenuSeparator />
             {workspaces.map(w => (
-              <DropdownMenuItem
-                key={w.id}
-                onClick={() => switchWorkspace(w.id)}
-                data-testid={`workspace-option-${w.id}`}
-              >
-                {w.name} <span className="ml-auto text-xs text-neutral-500 uppercase font-mono-data">{w.role}</span>
+              <DropdownMenuItem key={w.id} onClick={() => switchWorkspace(w.id)} data-testid={`workspace-option-${w.id}`}>
+                {w.name} <span className="ml-auto text-xs text-muted-foreground uppercase font-mono-data">{w.role}</span>
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
@@ -114,12 +129,31 @@ export default function Layout({ children }) {
 
       {/* Main */}
       <main className="flex-1 min-w-0 flex flex-col">
-        <div className="h-14 border-b border-[#E2E2E0] bg-white/70 backdrop-blur-xl px-6 flex items-center gap-3 sticky top-0 z-10">
-          <div className="flex items-center gap-2 text-sm text-neutral-500 flex-1">
+        <div className="h-14 border-b border-border bg-background/70 backdrop-blur-xl px-6 flex items-center gap-3 sticky top-0 z-10">
+          <button
+            onClick={() => setCmdOpen(true)}
+            className="flex items-center gap-2 text-sm text-muted-foreground flex-1 max-w-md px-3 py-1.5 rounded-sm border border-border hover:border-primary/40 transition-colors"
+            data-testid="global-search-trigger"
+          >
             <Search className="h-4 w-4" />
-            <span>Global search coming soon</span>
-          </div>
-          <div className="text-xs font-mono-data text-neutral-500 uppercase tracking-widest">
+            <span>Search customers, leads, deals…</span>
+            <span className="ml-auto font-mono-data text-[10px] border border-border px-1.5 py-0.5 rounded-sm">⌘K</span>
+          </button>
+
+          <div className="flex-1" />
+
+          <button
+            onClick={toggle}
+            className="p-2 rounded-sm hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+            aria-label="Toggle theme"
+            data-testid="theme-toggle"
+          >
+            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </button>
+
+          <NotificationsBell />
+
+          <div className="text-xs font-mono-data text-muted-foreground uppercase tracking-widest ml-2">
             {activeWorkspace?.role}
           </div>
         </div>

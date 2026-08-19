@@ -55,7 +55,7 @@ export default function Tasks() {
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <h1 className="font-heading text-4xl md:text-5xl">Tasks</h1>
-          <p className="text-sm text-neutral-500 mt-1 font-mono-data uppercase tracking-widest">{tasks.filter(t=>t.status!=='done').length} open</p>
+          <p className="text-sm text-muted-foreground mt-1 font-mono-data uppercase tracking-widest">{tasks.filter(t=>t.status!=='done').length} open</p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -87,17 +87,17 @@ export default function Tasks() {
         </Dialog>
       </div>
 
-      <Card className="rounded-sm border-[#E2E2E0] shadow-sm divide-y divide-[#E2E2E0]">
-        {tasks.length === 0 && <div className="text-center text-sm text-neutral-500 py-10">No tasks yet.</div>}
+      <Card className="rounded-sm border-border shadow-sm divide-y divide-[#E2E2E0]">
+        {tasks.length === 0 && <div className="text-center text-sm text-muted-foreground py-10">No tasks yet.</div>}
         {tasks.map(t => (
           <div key={t.id} className="flex items-center gap-4 p-4" data-testid={`task-row-${t.id}`}>
             <Checkbox checked={t.status === "done"} onCheckedChange={() => toggle(t)} data-testid={`task-toggle-${t.id}`} />
             <div className="flex-1 min-w-0">
               <div className={`text-sm ${t.status === "done" ? "line-through text-neutral-400" : ""}`}>{t.title}</div>
-              {t.description && <div className="text-xs text-neutral-500 mt-0.5">{t.description}</div>}
+              {t.description && <div className="text-xs text-muted-foreground mt-0.5">{t.description}</div>}
             </div>
             <span className={`text-[10px] uppercase font-mono-data px-2 py-0.5 rounded-sm ${priorityColor[t.priority]}`}>{t.priority}</span>
-            {t.due_date && <span className="text-xs text-neutral-500 font-mono-data">{t.due_date}</span>}
+            {t.due_date && <span className="text-xs text-muted-foreground font-mono-data">{t.due_date}</span>}
             <button onClick={() => remove(t.id)} className="text-neutral-400 hover:text-[#FF3823]" data-testid={`delete-task-${t.id}`}>
               <Trash2 className="h-4 w-4" />
             </button>

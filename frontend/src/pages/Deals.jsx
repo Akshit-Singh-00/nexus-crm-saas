@@ -65,7 +65,7 @@ export default function Deals() {
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <h1 className="font-heading text-4xl md:text-5xl">Deal Pipeline</h1>
-          <p className="text-sm text-neutral-500 mt-1 font-mono-data uppercase tracking-widest">{deals.length} deals · drag to move</p>
+          <p className="text-sm text-muted-foreground mt-1 font-mono-data uppercase tracking-widest">{deals.length} deals · drag to move</p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -105,17 +105,17 @@ export default function Deals() {
           const items = deals.filter(d => d.stage === stage.id);
           return (
             <div key={stage.id}
-                 className="w-80 shrink-0 bg-white border border-[#E2E2E0] rounded-sm"
+                 className="w-80 shrink-0 bg-card border border-border rounded-sm"
                  onDragOver={(e) => e.preventDefault()}
                  onDrop={() => dragId && move(dragId, stage.id)}
                  data-testid={`kanban-column-${stage.id}`}>
-              <div className="px-4 py-3 border-b border-[#E2E2E0] flex items-center justify-between">
+              <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="h-2 w-2 rounded-full" style={{ background: stage.color }} />
                   <span className="font-medium text-sm">{stage.label}</span>
-                  <span className="text-xs text-neutral-500 font-mono-data">{items.length}</span>
+                  <span className="text-xs text-muted-foreground font-mono-data">{items.length}</span>
                 </div>
-                <span className="font-mono-data text-xs text-neutral-500">${totalByStage(stage.id).toLocaleString()}</span>
+                <span className="font-mono-data text-xs text-muted-foreground">${totalByStage(stage.id).toLocaleString()}</span>
               </div>
               <div className="p-3 space-y-2 min-h-[300px]">
                 {items.map(d => (
@@ -123,7 +123,7 @@ export default function Deals() {
                        draggable
                        onDragStart={() => setDragId(d.id)}
                        onDragEnd={() => setDragId(null)}
-                       className="bg-white border border-[#E2E2E0] rounded-sm p-3 hover:border-[#0047FF] cursor-grab active:cursor-grabbing group"
+                       className="bg-card border border-border rounded-sm p-3 hover:border-[#0047FF] cursor-grab active:cursor-grabbing group"
                        data-testid={`deal-card-${d.id}`}>
                     <div className="flex justify-between items-start gap-2">
                       <div className="font-medium text-sm truncate">{d.title}</div>
@@ -131,7 +131,7 @@ export default function Deals() {
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
-                    <div className="text-xs text-neutral-500 mt-1">{customerName(d.customer_id)}</div>
+                    <div className="text-xs text-muted-foreground mt-1">{customerName(d.customer_id)}</div>
                     <div className="font-mono-data text-sm mt-2">${Number(d.value||0).toLocaleString()}</div>
                   </div>
                 ))}

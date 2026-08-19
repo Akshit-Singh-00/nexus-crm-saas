@@ -48,18 +48,18 @@ export default function CustomerDetail() {
     finally { setAiBusy(false); }
   };
 
-  if (!customer) return <div className="text-sm text-neutral-500">Loading…</div>;
+  if (!customer) return <div className="text-sm text-muted-foreground">Loading…</div>;
 
   return (
     <div className="space-y-6" data-testid="customer-detail-page">
       <div>
-        <Link to="/app/customers" className="text-sm text-neutral-500 hover:text-neutral-800 inline-flex items-center gap-1">
+        <Link to="/app/customers" className="text-sm text-muted-foreground hover:text-neutral-800 inline-flex items-center gap-1">
           <ChevronLeft className="h-4 w-4" /> All customers
         </Link>
         <div className="flex items-center justify-between mt-2 flex-wrap gap-4">
           <div>
             <h1 className="font-heading text-4xl md:text-5xl">{customer.name}</h1>
-            <div className="text-sm text-neutral-500 mt-1 font-mono-data">
+            <div className="text-sm text-muted-foreground mt-1 font-mono-data">
               {customer.company || "—"} · {customer.email || "—"}
             </div>
           </div>
@@ -68,14 +68,14 @@ export default function CustomerDetail() {
       </div>
 
       <div className="grid lg:grid-cols-12 gap-4">
-        <Card className="ai-grain rounded-sm border-[#E2E2E0] border-l-4 border-l-[#FF3823] shadow-sm p-6 lg:col-span-6 bg-[#FFF0EE]/40">
+        <Card className="ai-grain rounded-sm border-border border-l-4 border-l-[#FF3823] shadow-sm p-6 lg:col-span-6 bg-[#FFF0EE]/40">
           <div className="flex items-center gap-2 text-[#FF3823]">
             <Brain className="h-4 w-4" />
             <span className="text-xs uppercase tracking-widest font-mono-data">AI Customer Summary</span>
           </div>
           <div className="font-heading text-xl mt-3">Executive brief</div>
           {summary ? (
-            <div className="mt-4 text-sm bg-white/70 border border-[#E2E2E0] p-4 rounded-sm whitespace-pre-wrap" data-testid="ai-summary-result">
+            <div className="mt-4 text-sm bg-white/70 border border-border p-4 rounded-sm whitespace-pre-wrap" data-testid="ai-summary-result">
               {summary}
             </div>
           ) : (
@@ -86,10 +86,10 @@ export default function CustomerDetail() {
           )}
         </Card>
 
-        <Card className="rounded-sm border-[#E2E2E0] shadow-sm p-6 lg:col-span-6">
+        <Card className="rounded-sm border-border shadow-sm p-6 lg:col-span-6">
           <div className="flex items-center gap-2">
             <MessageSquare className="h-4 w-4 text-[#0047FF]" />
-            <span className="text-xs uppercase tracking-widest font-mono-data text-neutral-500">Notes</span>
+            <span className="text-xs uppercase tracking-widest font-mono-data text-muted-foreground">Notes</span>
           </div>
           <div className="mt-3 space-y-2">
             <Textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Log a note about this customer…"
@@ -99,11 +99,11 @@ export default function CustomerDetail() {
             </Button>
           </div>
           <div className="mt-6 space-y-3 max-h-[300px] overflow-y-auto">
-            {notes.length === 0 && <div className="text-sm text-neutral-500">No notes yet.</div>}
+            {notes.length === 0 && <div className="text-sm text-muted-foreground">No notes yet.</div>}
             {notes.map(n => (
               <div key={n.id} className="border-l-2 border-[#0047FF] pl-3 py-1" data-testid={`note-${n.id}`}>
                 <div className="text-sm">{n.content}</div>
-                <div className="text-[11px] text-neutral-500 mt-1 font-mono-data">
+                <div className="text-[11px] text-muted-foreground mt-1 font-mono-data">
                   {n.author?.name} · {new Date(n.created_at).toLocaleString()}
                 </div>
               </div>
@@ -112,17 +112,17 @@ export default function CustomerDetail() {
         </Card>
       </div>
 
-      <Card className="rounded-sm border-[#E2E2E0] shadow-sm p-6">
-        <div className="text-xs uppercase tracking-widest font-mono-data text-neutral-500 mb-4">Activity timeline</div>
-        {activities.length === 0 && <div className="text-sm text-neutral-500">No activity yet.</div>}
+      <Card className="rounded-sm border-border shadow-sm p-6">
+        <div className="text-xs uppercase tracking-widest font-mono-data text-muted-foreground mb-4">Activity timeline</div>
+        {activities.length === 0 && <div className="text-sm text-muted-foreground">No activity yet.</div>}
         <div className="space-y-3">
           {activities.map(a => (
             <div key={a.id} className="flex items-start gap-3">
               <div className="mt-1.5 h-1.5 w-1.5 rounded-full bg-[#0047FF]" />
               <div className="text-sm">
                 <span className="font-medium">{a.actor?.name}</span>
-                <span className="text-neutral-500"> {a.action} {a.entity_type}</span>
-                <div className="text-[11px] text-neutral-500 font-mono-data">{new Date(a.created_at).toLocaleString()}</div>
+                <span className="text-muted-foreground"> {a.action} {a.entity_type}</span>
+                <div className="text-[11px] text-muted-foreground font-mono-data">{new Date(a.created_at).toLocaleString()}</div>
               </div>
             </div>
           ))}

@@ -72,7 +72,7 @@ export default function Leads() {
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <h1 className="font-heading text-4xl md:text-5xl">Leads</h1>
-          <p className="text-sm text-neutral-500 mt-1 font-mono-data uppercase tracking-widest">{rows.length} records · AI scoring</p>
+          <p className="text-sm text-muted-foreground mt-1 font-mono-data uppercase tracking-widest">{rows.length} records · AI scoring</p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -111,9 +111,9 @@ export default function Leads() {
         </Dialog>
       </div>
 
-      <Card className="rounded-sm border-[#E2E2E0] shadow-sm">
-        <div className="p-4 border-b border-[#E2E2E0] flex items-center gap-2">
-          <Search className="h-4 w-4 text-neutral-500" />
+      <Card className="rounded-sm border-border shadow-sm">
+        <div className="p-4 border-b border-border flex items-center gap-2">
+          <Search className="h-4 w-4 text-muted-foreground" />
           <Input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search leads…"
                  className="border-0 shadow-none focus-visible:ring-0 h-8" data-testid="lead-search" />
         </div>
@@ -130,15 +130,15 @@ export default function Leads() {
           </TableHeader>
           <TableBody>
             {rows.length === 0 && (
-              <TableRow><TableCell colSpan={6} className="text-center text-sm text-neutral-500 py-10">No leads yet.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-10">No leads yet.</TableCell></TableRow>
             )}
             {rows.map(r => (
               <TableRow key={r.id} data-testid={`lead-row-${r.id}`}>
                 <TableCell className="font-medium">
                   {r.name}
-                  {r.score_reason && <div className="text-[11px] text-neutral-500 mt-0.5 max-w-md truncate">{r.score_reason}</div>}
+                  {r.score_reason && <div className="text-[11px] text-muted-foreground mt-0.5 max-w-md truncate">{r.score_reason}</div>}
                 </TableCell>
-                <TableCell className="text-neutral-600">{r.company || "—"}</TableCell>
+                <TableCell className="text-muted-foreground">{r.company || "—"}</TableCell>
                 <TableCell><Badge className={`${statusColors[r.status]} hover:${statusColors[r.status]} rounded-sm border-0`}>{r.status}</Badge></TableCell>
                 <TableCell className="font-mono-data text-xs">${Number(r.value||0).toLocaleString()}</TableCell>
                 <TableCell><ScoreBadge score={r.score} /></TableCell>
@@ -149,7 +149,7 @@ export default function Leads() {
                       <Sparkles className="h-4 w-4" />
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => remove(r.id)}
-                            className="h-8 text-neutral-500 hover:text-[#FF3823]" data-testid={`delete-lead-${r.id}`}>
+                            className="h-8 text-muted-foreground hover:text-[#FF3823]" data-testid={`delete-lead-${r.id}`}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>

@@ -20,7 +20,35 @@ Multi-tenant SaaS CRM where companies create their own workspace and manage cust
 ## Multi-tenancy model
 Every entity carries `workspace_id`. Requests require `X-Workspace-Id` header + JWT. Membership lookup enforces role-based access.
 
-## Delivered (2026-02)
+## Delivered (2026-02) — Iteration 2
+
+### Invite Acceptance
+- Signed JWT invite tokens (7-day expiry) stored in `invites` collection
+- Copyable invite link + optional Resend email delivery
+- `/invite/:token` page auto-detects existing vs new users; sets password + attaches membership
+- Endpoints: `POST /workspaces/invite`, `GET /invites/{token}`, `POST /invites/{token}/accept`
+
+### Global Search (Cmd+K)
+- `GET /api/search?q=` scoped to workspace; searches customers, leads, deals (6 each)
+- Shadcn CommandDialog palette with debounced query + keyboard shortcut
+
+### Notifications
+- `notifications` collection; auto-created on deal-stage change (broadcast) and task-assignment (targeted)
+- Bell in topbar polls every 20s, shows unread badge, mark-single/mark-all read
+- Endpoints: `GET /notifications`, `POST /notifications/{id}/read`, `POST /notifications/read-all`
+
+### Stripe Billing (Flow B)
+- 3 plans: Starter (free), Pro ($29/mo), Team ($79/mo)
+- Emergentintegrations checkout + webhook + status polling
+- `/app/billing` page with 3 pricing cards, current-plan highlight, test-card hint
+- Endpoints: `GET /billing/plans`, `GET /billing/subscription`, `POST /billing/checkout`, `GET /payments/status/{id}`, `POST /webhook/stripe`
+
+### Dark theme
+- Full CSS token overhaul: canvas, surface, hairline, muted; default dark
+- Sun/Moon topbar toggle, persisted to localStorage
+- All app pages migrated to theme tokens
+
+## Delivered (2026-02) — Iteration 1
 ### Phase 1 — Foundation ✅
 - JWT signup/login/me
 - Workspace creation + switcher

@@ -57,7 +57,7 @@ export default function Customers() {
       <div className="flex items-end justify-between flex-wrap gap-4">
         <div>
           <h1 className="font-heading text-4xl md:text-5xl">Customers</h1>
-          <p className="text-sm text-neutral-500 mt-1 font-mono-data uppercase tracking-widest">{rows.length} records</p>
+          <p className="text-sm text-muted-foreground mt-1 font-mono-data uppercase tracking-widest">{rows.length} records</p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -87,9 +87,9 @@ export default function Customers() {
         </Dialog>
       </div>
 
-      <Card className="rounded-sm border-[#E2E2E0] shadow-sm">
-        <div className="p-4 border-b border-[#E2E2E0] flex items-center gap-2">
-          <Search className="h-4 w-4 text-neutral-500" />
+      <Card className="rounded-sm border-border shadow-sm">
+        <div className="p-4 border-b border-border flex items-center gap-2">
+          <Search className="h-4 w-4 text-muted-foreground" />
           <Input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search customers…"
                  className="border-0 shadow-none focus-visible:ring-0 h-8" data-testid="customer-search" />
         </div>
@@ -105,13 +105,13 @@ export default function Customers() {
           </TableHeader>
           <TableBody>
             {rows.length === 0 && (
-              <TableRow><TableCell colSpan={5} className="text-center text-sm text-neutral-500 py-10">No customers yet.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-10">No customers yet.</TableCell></TableRow>
             )}
             {rows.map(r => (
               <TableRow key={r.id} data-testid={`customer-row-${r.id}`}>
                 <TableCell className="font-medium">{r.name}</TableCell>
-                <TableCell className="text-neutral-600">{r.company || "—"}</TableCell>
-                <TableCell className="text-neutral-600 font-mono-data text-xs">{r.email || "—"}</TableCell>
+                <TableCell className="text-muted-foreground">{r.company || "—"}</TableCell>
+                <TableCell className="text-muted-foreground font-mono-data text-xs">{r.email || "—"}</TableCell>
                 <TableCell>
                   <Badge className={`${statusColor[r.status]} hover:${statusColor[r.status]} rounded-sm border-0`}>{r.status}</Badge>
                 </TableCell>

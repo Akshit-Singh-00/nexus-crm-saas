@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 2 testing: 21/21 backend pytest tests passed for invites (link + acceptance + login-after-accept), notifications (task assign + deal stage broadcast + mark single/all read), global search (scoped to workspace, 6-item cap), and Stripe Flow B billing (plans, subscription, checkout, payment status). Frontend: Playwright verified theme toggle (dark<->light with localStorage persistence), Cmd+K command palette, notifications bell, billing page with 3 plans and correct prices ($0/$29/$79), Team invite dialog produces copyable /invite/<token> link, and /invite/:token page renders + accepts + redirects to /app.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/billing/checkout", "issue": "Invalid plan_id (e.g. 'starter', 'free') returns 422 (pydantic Literal) rather than the 400 stated in the spec. Semantically equivalent — tests accept both."},
+      {"endpoint": "/api/workspaces/invite", "issue": "Generated invite_link uses APP_URL from env (currently workspace-crm-6.preview...) but running process appears to have resolved a stale hostname (7e73e66e-...preview...). Both hosts route to the same backend so acceptance still works, but the link shown in UI does not match REACT_APP_BACKEND_URL. Consider restarting backend or deriving from request origin as a fallback."},
+      {"endpoint": "/api/billing/subscription", "issue": "Existing workspaces created before Iteration 2 have plan='free' (create_workspace sets it), but Billing.jsx compares against PLANS keys {starter,pro,team}. Result: no 'Current' badge on Starter for pre-existing workspaces. Backfill plan='starter' or map 'free'->'starter'."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Layout topbar", "issue": "Sonner 'Welcome back' toast overlays the top-right area where theme-toggle/bell sit and can intercept clicks during its 3s visibility window. Consider moving toaster to bottom-right, or lowering z-index, or shortening duration.", "selector": "[data-testid=theme-toggle]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Billing", "issues": ["No 'Current' badge on Starter for legacy workspaces because plan='free' (see backend minor issue). Team plan CTA gradient/color combos read fine in both themes."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration2.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter2_results.xml"
+  ],
+  "action_items": [
+    "Backfill workspaces with plan='free' to plan='starter' (or normalize in backend) so the 'Current' badge highlights the correct plan card.",
+    "Restart backend or read APP_URL/origin at request time so invite links use the current preview hostname.",
+    "Optional: move sonner Toaster to bottom-right so it doesn't sit over topbar controls."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1094 lines — please split into routers/ (auth, workspaces, invites, notifications, billing, ai, email) for maintainability.",
+    "billing_checkout imports emergentintegrations.payments.stripe.checkout inside the handler on every call — acceptable but move to module top for a small perf/readability win.",
+    "AI JSON parsing in /api/ai/score-lead still lacks try/except around json.loads (would 500 on malformed model output).",
+    "create_workspace defaults plan='free' but Billing UI and PLANS dict use 'starter'. Pick one and be consistent.",
+    "Payment webhook (POST /api/webhook/stripe) not tested in this run (skipped per instructions). GET /api/payments/status polls Stripe as fallback and correctly gates promotions to plan via _mark_paid — good.",
+    "Invite link is generated from APP_URL only; falling back to request origin (or REACT_APP_BACKEND_URL) would be more robust."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration2.py (new)",
+    "/app/test_reports/iteration_2.json (new)"
+  ],
+  "success_rate": {"backend": "100% (21/21 iteration-2 tests)", "frontend": "100% of scripted iteration-2 flows"},
+  "test_credentials": "Demo owner: demo@nexus.com / demo1234. Dynamic invitees per-run via /invites/{token}/accept with password 'invpass123' or 'invitedpw123'.",
+  "seed_data_creation": "Backend suite seeds a fresh owner + workspace + invitee per run; frontend flow seeds one Team invite + accepted user against the demo workspace.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration-2 suite lives at /app/backend/tests/test_iteration2.py (independent of iter-1 suite). Uses Stripe Flow B via emergentintegrations with STRIPE_API_KEY=sk_test_emergent — checkout URL must start with https://checkout.stripe.com. When testing theme toggle via Playwright, dispatch click via JS or wait ~4s for the login toast to auto-dismiss, otherwise the sonner toast intercepts the click even with force=True.",
+  "rca of the issue": "N/A — no blocking issues. Minor UX regression: legacy workspaces created with plan='free' don't get the Starter 'Current' badge because Billing page checks currentPlan against 'starter'/'pro'/'team'. Fix by backfilling or updating create_workspace default."
+}
