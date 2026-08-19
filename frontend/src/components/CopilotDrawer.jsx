@@ -28,7 +28,8 @@ export default function CopilotDrawer({ open, onOpenChange, focus }) {
     const msg = (text ?? input).trim();
     if (!msg) return;
     setInput("");
-    setMessages((m) => [...m, { role: "user", text: msg }]);
+    const userKey = `u${Date.now()}`;
+    setMessages((m) => [...m, { key: userKey, role: "user", text: msg }]);
     setBusy(true);
     try {
       const { data } = await api.post("/ai/copilot", {
@@ -36,7 +37,7 @@ export default function CopilotDrawer({ open, onOpenChange, focus }) {
         context_type: focus?.type,
         context_id: focus?.id,
       });
-      setMessages((m) => [...m, { role: "ai", text: data.answer }]);
+      setMessages((m) => [...m, { key: `a${Date.now()}`, role: "ai", text: data.answer }]);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Copilot failed");
     } finally { setBusy(false); }
@@ -71,7 +72,7 @@ export default function CopilotDrawer({ open, onOpenChange, focus }) {
             </div>
           )}
           {messages.map((m, i) => (
-            <div key={i} className={`flex gap-3 ${m.role === "user" ? "flex-row-reverse" : ""}`}>
+            <div key={m.key || `msg-${i}`} className={`flex gap-3 ${m.role === "user" ? "flex-row-reverse" : ""}`}>
               <div className={`h-7 w-7 shrink-0 rounded-full flex items-center justify-center ${m.role === "user" ? "bg-[#0047FF] text-white" : "bg-[#FF3823] text-white"}`}>
                 {m.role === "user" ? <User className="h-3.5 w-3.5" /> : <Brain className="h-3.5 w-3.5" />}
               </div>

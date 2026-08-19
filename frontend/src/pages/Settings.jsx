@@ -118,7 +118,7 @@ export default function Settings() {
         </div>
         <div className="space-y-2">
           {stages.map((s, i) => (
-            <div key={i} className="flex items-center gap-2 p-2 border border-border rounded-sm bg-card" data-testid={`stage-row-${i}`}>
+            <div key={s.id || `stage-${i}`} className="flex items-center gap-2 p-2 border border-border rounded-sm bg-card" data-testid={`stage-row-${i}`}>
               <GripVertical className="h-4 w-4 text-muted-foreground" />
               <Input value={s.label} onChange={(e) => updateStage(i, "label", e.target.value)}
                      className="rounded-sm flex-1" data-testid={`stage-label-${i}`} />

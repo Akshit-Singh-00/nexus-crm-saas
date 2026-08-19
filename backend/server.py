@@ -447,6 +447,7 @@ async def invite_member(body: InviteIn, ctx: dict = Depends(require_perm("member
 
 @api.get("/invites/{token}")
 async def get_invite(token: str):
+    payload: dict = {}
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
     except Exception:
@@ -1011,7 +1012,6 @@ async def ai_summarize_customer(cid: str, ctx: dict = Depends(require_perm("ai",
     except Exception as e:
         raise HTTPException(500, f"AI error: {e}")
     return {"summary": summary}
-
 @api.get("/ai/sales-forecast")
 async def ai_sales_forecast(ctx: dict = Depends(require_workspace)):
     wid = ctx["workspace_id"]
@@ -1025,6 +1025,7 @@ async def ai_sales_forecast(ctx: dict = Depends(require_workspace)):
     )
     system = ("You are a sales forecasting analyst. Given a pipeline snapshot with deal counts and values per stage, "
               "predict likely revenue for the next quarter and highlight two key risks. Keep it under 120 words, plain text.")
+    forecast = ""
     try:
         forecast = await call_claude(system, context_str)
     except Exception as e:
@@ -1583,6 +1584,7 @@ async def ai_copilot(body: CopilotIn, ctx: dict = Depends(require_perm("ai", "us
         f"USER QUESTION:\n{body.message}\n\n"
         f"CRM SNAPSHOT:\n{ctx_snapshot}\n"
     )
+    answer = ""
     try:
         answer = await call_claude(system, prompt)
     except Exception as e:

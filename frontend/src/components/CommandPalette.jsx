@@ -28,7 +28,9 @@ export default function CommandPalette({ open, onOpenChange }) {
       try {
         const { data } = await api.get("/search", { params: { q } });
         setResults(data);
-      } catch (_) { /* ignore */ }
+      } catch (error) {
+        console.error("Search failed:", error);
+      }
     }, 200);
     return () => clearTimeout(t);
   }, [q]);

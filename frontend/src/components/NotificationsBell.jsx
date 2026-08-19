@@ -17,7 +17,9 @@ export default function NotificationsBell() {
       const { data } = await api.get("/notifications");
       setItems(data.items || []);
       setUnread(data.unread || 0);
-    } catch (_) { /* ignore */ }
+    } catch (error) {
+      console.error("Notifications fetch failed:", error);
+    }
   };
 
   useEffect(() => {

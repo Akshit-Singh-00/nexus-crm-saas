@@ -42,7 +42,9 @@ export default function Billing() {
             load();
             return;
           }
-        } catch { /* keep polling */ }
+        } catch (error) {
+          console.error("Payment status poll failed:", error);
+        }
         if (tries++ < 8) setTimeout(poll, 2000);
         else { toast.info("Payment processing — check back shortly."); setParams({}); }
       };

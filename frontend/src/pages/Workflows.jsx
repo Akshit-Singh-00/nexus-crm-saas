@@ -93,14 +93,14 @@ export default function Workflows() {
 
   const setCond = (i, k, v) =>
     setForm({ ...form, conditions: form.conditions.map((c, idx) => idx === i ? { ...c, [k]: v } : c) });
-  const addCond = () => setForm({ ...form, conditions: [...form.conditions, { field: triggerFields[0], op: "gt", value: "" }] });
+  const addCond = () => setForm({ ...form, conditions: [...form.conditions, { _key: `c${Date.now()}`, field: triggerFields[0], op: "gt", value: "" }] });
   const removeCond = (i) => setForm({ ...form, conditions: form.conditions.filter((_, idx) => idx !== i) });
 
   const setAction = (i, patch) =>
     setForm({ ...form, actions: form.actions.map((a, idx) => idx === i ? { ...a, ...patch } : a) });
   const setActionParam = (i, k, v) =>
     setForm({ ...form, actions: form.actions.map((a, idx) => idx === i ? { ...a, params: { ...a.params, [k]: v } } : a) });
-  const addAction = () => setForm({ ...form, actions: [...form.actions, { type: "create_task", params: {} }] });
+  const addAction = () => setForm({ ...form, actions: [...form.actions, { _key: `a${Date.now()}`, type: "create_task", params: {} }] });
   const removeAction = (i) => setForm({ ...form, actions: form.actions.filter((_, idx) => idx !== i) });
 
   return (
@@ -201,7 +201,7 @@ export default function Workflows() {
               {form.conditions.length === 0 && <div className="text-xs text-muted-foreground">No conditions — always runs on trigger.</div>}
               <div className="space-y-2">
                 {form.conditions.map((c, i) => (
-                  <div key={i} className="flex items-center gap-2" data-testid={`condition-row-${i}`}>
+                  <div key={c._key || `cond-${i}`} className="flex items-center gap-2" data-testid={`condition-row-${i}`}>
                     <Select value={c.field} onValueChange={(v) => setCond(i, "field", v)}>
                       <SelectTrigger className="rounded-sm w-40"><SelectValue /></SelectTrigger>
                       <SelectContent>{triggerFields.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
@@ -230,7 +230,7 @@ export default function Workflows() {
               </div>
               <div className="space-y-2">
                 {form.actions.map((a, i) => (
-                  <div key={i} className="border border-border rounded-sm p-3 bg-card" data-testid={`action-row-${i}`}>
+                  <div key={a._key || `act-${i}`} className="border border-border rounded-sm p-3 bg-card" data-testid={`action-row-${i}`}>
                     <div className="flex items-center gap-2">
                       <Select value={a.type} onValueChange={(v) => setAction(i, { type: v, params: {} })}>
                         <SelectTrigger className="rounded-sm w-48"><SelectValue /></SelectTrigger>

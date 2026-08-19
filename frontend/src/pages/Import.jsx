@@ -162,7 +162,7 @@ export default function Import() {
               </TableHeader>
               <TableBody>
                 {preview.sample_rows.map((row, i) => (
-                  <TableRow key={i}>
+                  <TableRow key={`preview-row-${i}`}>
                     {preview.headers.map((h) => <TableCell key={h} className="text-xs">{row[h] || "—"}</TableCell>)}
                   </TableRow>
                 ))}
@@ -193,7 +193,7 @@ export default function Import() {
           </div>
           {result.errors.length > 0 && (
             <div className="text-left max-w-md mx-auto text-xs text-muted-foreground font-mono-data max-h-32 overflow-y-auto border border-border rounded-sm p-3">
-              {result.errors.slice(0, 10).map((e, i) => <div key={i}>Row {e.row}: {e.error}</div>)}
+              {result.errors.slice(0, 10).map((e, i) => <div key={`err-${e.row}-${i}`}>Row {e.row}: {e.error}</div>)}
             </div>
           )}
           <div className="flex gap-3 justify-center pt-2">
