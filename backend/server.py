@@ -1,5 +1,7 @@
 """NexusCRM - Multi-tenant SaaS CRM Backend."""
 import os
+import csv
+import io
 import uuid
 import logging
 import re
@@ -243,6 +245,39 @@ class CopilotIn(BaseModel):
     message: str
     context_type: Optional[str] = None  # customer/lead/deal
     context_id: Optional[str] = None
+
+
+# ----------- CSV Import models -----------
+class ImportPreviewIn(BaseModel):
+    csv_text: str
+    entity: Literal["customer", "lead"]
+
+class ImportExecuteIn(BaseModel):
+    csv_text: str
+    entity: Literal["customer", "lead"]
+    mapping: dict  # {csv_column_name: entity_field_name}
+
+
+# ----------- Workflow models -----------
+WORKFLOW_TRIGGERS = ("lead_created", "lead_scored", "customer_created", "deal_stage_changed", "deal_created")
+WORKFLOW_ACTIONS = ("create_task", "assign_user", "notify_user", "add_tag")
+
+class WorkflowConditionIn(BaseModel):
+    field: str
+    op: Literal["eq", "neq", "gt", "gte", "lt", "lte", "contains", "in"]
+    value: object = None
+
+class WorkflowActionIn(BaseModel):
+    type: Literal["create_task", "assign_user", "notify_user", "add_tag"]
+    params: dict = {}
+
+class WorkflowIn(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    trigger: Literal["lead_created", "lead_scored", "customer_created", "deal_stage_changed", "deal_created"]
+    conditions: List[WorkflowConditionIn] = []
+    actions: List[WorkflowActionIn] = Field(min_length=1)
+    enabled: bool = True
 
 class TaskIn(BaseModel):
     title: str
@@ -508,6 +543,7 @@ async def create_customer(body: CustomerIn, ctx: dict = Depends(require_perm("cu
     }
     await db.customers.insert_one(doc)
     await log_activity(ctx["workspace_id"], ctx["user"]["id"], "created", "customer", doc["id"], {"name": body.name})
+    await fire_workflows("customer_created", ctx["workspace_id"], doc)
     doc.pop("_id", None)
     return doc
 
@@ -563,6 +599,7 @@ async def create_lead(body: LeadIn, ctx: dict = Depends(require_perm("lead", "cr
     }
     await db.leads.insert_one(doc)
     await log_activity(ctx["workspace_id"], ctx["user"]["id"], "created", "lead", doc["id"], {"name": body.name})
+    await fire_workflows("lead_created", ctx["workspace_id"], doc)
     doc.pop("_id", None)
     return doc
 
@@ -640,6 +677,7 @@ async def create_deal(body: DealIn, ctx: dict = Depends(require_perm("deal", "cr
     }
     await db.deals.insert_one(doc)
     await log_activity(ctx["workspace_id"], ctx["user"]["id"], "created", "deal", doc["id"], {"title": body.title})
+    await fire_workflows("deal_created", ctx["workspace_id"], doc)
     doc.pop("_id", None)
     return doc
 
@@ -662,6 +700,9 @@ async def update_deal_stage(did: str, body: DealStageUpdate, ctx: dict = Depends
     if not r.matched_count:
         raise HTTPException(404, "Not found")
     await log_activity(ctx["workspace_id"], ctx["user"]["id"], "stage_changed", "deal", did, {"stage": body.stage})
+    updated = await db.deals.find_one(workspace_query(ctx, {"id": did}), {"_id": 0})
+    if updated:
+        await fire_workflows("deal_stage_changed", ctx["workspace_id"], updated)
     await notify_workspace(
         ctx["workspace_id"],
         exclude_user=ctx["user"]["id"],
@@ -941,6 +982,9 @@ async def ai_score_lead(lid: str, ctx: dict = Depends(require_perm("ai", "use"))
         }},
     )
     await log_activity(ctx["workspace_id"], ctx["user"]["id"], "ai_scored", "lead", lid, {"score": score})
+    updated_lead = await db.leads.find_one(workspace_query(ctx, {"id": lid}), {"_id": 0})
+    if updated_lead:
+        await fire_workflows("lead_scored", ctx["workspace_id"], updated_lead)
     return {"score": score, "classification": classification, "reasons": reasons}
 
 @api.post("/ai/summarize-customer/{cid}")
@@ -1546,9 +1590,277 @@ async def ai_copilot(body: CopilotIn, ctx: dict = Depends(require_perm("ai", "us
     return {"answer": answer}
 
 
+# ----------- CSV Import -----------
+CUSTOMER_FIELDS = ["name", "email", "phone", "company", "status"]
+LEAD_FIELDS = ["name", "email", "phone", "company", "source", "status", "value"]
+
+
+def _parse_csv(csv_text: str) -> tuple:
+    if not csv_text.strip():
+        raise HTTPException(400, "Empty CSV")
+    reader = csv.reader(io.StringIO(csv_text))
+    rows = list(reader)
+    if not rows:
+        raise HTTPException(400, "No rows in CSV")
+    headers = [h.strip() for h in rows[0]]
+    data_rows = [r for r in rows[1:] if any(c.strip() for c in r)]
+    return headers, data_rows
+
+
+def _infer_mapping(headers: List[str], entity: str) -> dict:
+    fields = CUSTOMER_FIELDS if entity == "customer" else LEAD_FIELDS
+    result = {}
+    for h in headers:
+        low = h.lower().strip()
+        for f in fields:
+            if f == low or f in low or low in f:
+                result[h] = f
+                break
+    return result
+
+
+@api.post("/import/preview")
+async def import_preview(body: ImportPreviewIn, ctx: dict = Depends(require_workspace)):
+    if body.entity == "lead" and not can(ctx["role"], "lead", "create"):
+        raise HTTPException(403, "Missing permission: lead.create")
+    if body.entity == "customer" and not can(ctx["role"], "customer", "create"):
+        raise HTTPException(403, "Missing permission: customer.create")
+    headers, data_rows = _parse_csv(body.csv_text)
+    fields = CUSTOMER_FIELDS if body.entity == "customer" else LEAD_FIELDS
+    return {
+        "headers": headers,
+        "sample_rows": [dict(zip(headers, r + [""] * (len(headers) - len(r)))) for r in data_rows[:5]],
+        "total_rows": len(data_rows),
+        "target_fields": fields,
+        "suggested_mapping": _infer_mapping(headers, body.entity),
+    }
+
+
+@api.post("/import/execute")
+async def import_execute(body: ImportExecuteIn, ctx: dict = Depends(require_workspace)):
+    if body.entity == "lead" and not can(ctx["role"], "lead", "create"):
+        raise HTTPException(403, "Missing permission: lead.create")
+    if body.entity == "customer" and not can(ctx["role"], "customer", "create"):
+        raise HTTPException(403, "Missing permission: customer.create")
+    headers, data_rows = _parse_csv(body.csv_text)
+    if len(data_rows) > 5000:
+        raise HTTPException(400, f"Too many rows ({len(data_rows)}). Maximum 5000 per import.")
+    fields = CUSTOMER_FIELDS if body.entity == "customer" else LEAD_FIELDS
+    coll = db.customers if body.entity == "customer" else db.leads
+    inserted = 0
+    errors = []
+    for i, row in enumerate(data_rows):
+        try:
+            row_dict = dict(zip(headers, row + [""] * (len(headers) - len(row))))
+            entity_data = {}
+            for csv_col, field in body.mapping.items():
+                if field not in fields:
+                    continue
+                val = row_dict.get(csv_col, "").strip()
+                if not val:
+                    continue
+                if field == "value":
+                    try:
+                        entity_data[field] = float(val)
+                    except Exception:
+                        entity_data[field] = 0
+                else:
+                    entity_data[field] = val
+            if not entity_data.get("name"):
+                errors.append({"row": i + 2, "error": "Missing name"})
+                continue
+            # Defaults
+            if body.entity == "customer":
+                entity_data.setdefault("status", "active")
+                entity_data.setdefault("tags", [])
+            else:
+                entity_data.setdefault("status", "new")
+                entity_data.setdefault("source", "csv_import")
+                entity_data.setdefault("value", 0)
+                entity_data.setdefault("score", None)
+                entity_data.setdefault("classification", None)
+            doc = {
+                "id": new_id(),
+                "workspace_id": ctx["workspace_id"],
+                "created_by": ctx["user"]["id"],
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+                **entity_data,
+            }
+            await coll.insert_one(doc)
+            inserted += 1
+        except Exception as e:
+            errors.append({"row": i + 2, "error": str(e)})
+    await audit(ctx, "imported", body.entity, "batch", after={"count": inserted, "errors": len(errors)})
+    return {"inserted": inserted, "errors": errors, "total": len(data_rows)}
+
+
+# ----------- Workflow Automation -----------
+def _eval_condition(record: dict, cond: dict) -> bool:
+    val = record.get(cond["field"])
+    target = cond.get("value")
+    op = cond["op"]
+    try:
+        if op == "eq": return val == target
+        if op == "neq": return val != target
+        if op == "gt": return (val or 0) > float(target)
+        if op == "gte": return (val or 0) >= float(target)
+        if op == "lt": return (val or 0) < float(target)
+        if op == "lte": return (val or 0) <= float(target)
+        if op == "contains": return str(target).lower() in str(val or "").lower()
+        if op == "in":
+            items = target if isinstance(target, list) else [target]
+            return val in items
+    except Exception:
+        return False
+    return False
+
+
+async def _execute_action(action: dict, record: dict, workflow: dict, workspace_id: str):
+    a_type = action["type"]
+    params = action.get("params", {})
+    try:
+        if a_type == "create_task":
+            task = {
+                "id": new_id(),
+                "workspace_id": workspace_id,
+                "created_by": workflow.get("id", "workflow"),
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+                "title": (params.get("title") or f"Follow up on {record.get('name') or record.get('title', 'record')}"),
+                "description": params.get("description", f"Auto-created by workflow: {workflow['name']}"),
+                "priority": params.get("priority", "medium"),
+                "status": "todo",
+                "assignee_id": params.get("assignee_id"),
+                "due_date": params.get("due_date"),
+                "related_type": workflow.get("_entity_type"),
+                "related_id": record.get("id"),
+            }
+            await db.tasks.insert_one(task)
+            if task["assignee_id"]:
+                await create_notification(
+                    workspace_id=workspace_id, user_id=task["assignee_id"],
+                    title="Task auto-assigned by workflow",
+                    body=task["title"], kind="workflow_task",
+                    entity_type="task", entity_id=task["id"],
+                )
+        elif a_type == "assign_user":
+            uid = params.get("user_id")
+            entity_type = workflow.get("_entity_type")
+            if uid and entity_type and record.get("id"):
+                coll = {"lead": db.leads, "customer": db.customers, "deal": db.deals}.get(entity_type)
+                if coll is not None:
+                    await coll.update_one(
+                        {"id": record["id"], "workspace_id": workspace_id},
+                        {"$set": {"assignee_id": uid, "updated_at": now_iso()}}
+                    )
+                    await create_notification(
+                        workspace_id=workspace_id, user_id=uid,
+                        title=f"{entity_type.title()} auto-assigned by workflow",
+                        body=(record.get("name") or record.get("title") or ""),
+                        kind="workflow_assign", entity_type=entity_type, entity_id=record["id"],
+                    )
+        elif a_type == "notify_user":
+            uid = params.get("user_id")
+            if uid:
+                await create_notification(
+                    workspace_id=workspace_id, user_id=uid,
+                    title=params.get("title", f"Workflow: {workflow['name']}"),
+                    body=params.get("body", f"Triggered on {record.get('name') or record.get('title', 'a record')}"),
+                    kind="workflow_notify",
+                )
+        elif a_type == "add_tag":
+            tag = params.get("tag")
+            entity_type = workflow.get("_entity_type")
+            if tag and entity_type and record.get("id"):
+                coll = {"lead": db.leads, "customer": db.customers, "deal": db.deals}.get(entity_type)
+                if coll is not None:
+                    await coll.update_one(
+                        {"id": record["id"], "workspace_id": workspace_id},
+                        {"$addToSet": {"tags": tag}, "$set": {"updated_at": now_iso()}}
+                    )
+    except Exception:
+        logging.exception(f"Workflow action failed: {a_type}")
+
+
+TRIGGER_ENTITY = {
+    "lead_created": "lead",
+    "lead_scored": "lead",
+    "customer_created": "customer",
+    "deal_created": "deal",
+    "deal_stage_changed": "deal",
+}
+
+
+async def fire_workflows(trigger: str, workspace_id: str, record: dict):
+    """Fire all enabled workflows matching this trigger for the given workspace."""
+    try:
+        workflows = await db.workflows.find(
+            {"workspace_id": workspace_id, "trigger": trigger, "enabled": True}, {"_id": 0}
+        ).to_list(50)
+        for wf in workflows:
+            wf["_entity_type"] = TRIGGER_ENTITY.get(trigger)
+            conds = wf.get("conditions", []) or []
+            if conds and not all(_eval_condition(record, c) for c in conds):
+                continue
+            for action in wf.get("actions", []) or []:
+                await _execute_action(action, record, wf, workspace_id)
+            await db.workflows.update_one(
+                {"id": wf["id"]},
+                {"$set": {"last_run_at": now_iso()}, "$inc": {"run_count": 1}},
+            )
+    except Exception:
+        logging.exception(f"fire_workflows failed for {trigger}")
+
+
+@api.get("/workflows")
+async def list_workflows(ctx: dict = Depends(require_perm("settings", "manage"))):
+    return await db.workflows.find(workspace_query(ctx), {"_id": 0}).sort("created_at", -1).to_list(100)
+
+
+@api.post("/workflows")
+async def create_workflow(body: WorkflowIn, ctx: dict = Depends(require_perm("settings", "manage"))):
+    if body.trigger not in WORKFLOW_TRIGGERS:
+        raise HTTPException(400, "Invalid trigger")
+    doc = {
+        "id": new_id(),
+        "workspace_id": ctx["workspace_id"],
+        "created_by": ctx["user"]["id"],
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "run_count": 0,
+        "last_run_at": None,
+        **body.model_dump(),
+    }
+    await db.workflows.insert_one(doc)
+    await audit(ctx, "created", "workflow", doc["id"], after={"name": body.name, "trigger": body.trigger})
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/workflows/{wid}")
+async def update_workflow(wid: str, body: WorkflowIn, ctx: dict = Depends(require_perm("settings", "manage"))):
+    r = await db.workflows.update_one(
+        workspace_query(ctx, {"id": wid}),
+        {"$set": {**body.model_dump(), "updated_at": now_iso()}},
+    )
+    if not r.matched_count:
+        raise HTTPException(404, "Not found")
+    await audit(ctx, "updated", "workflow", wid, after={"name": body.name})
+    return {"ok": True}
+
+
+@api.delete("/workflows/{wid}")
+async def delete_workflow(wid: str, ctx: dict = Depends(require_perm("settings", "manage"))):
+    r = await db.workflows.delete_one(workspace_query(ctx, {"id": wid}))
+    if not r.deleted_count:
+        raise HTTPException(404, "Not found")
+    await audit(ctx, "deleted", "workflow", wid)
+    return {"ok": True}
+
+
 # Mount
 app.include_router(api)
-
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

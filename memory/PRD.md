@@ -20,6 +20,26 @@ Multi-tenant SaaS CRM where companies create their own workspace and manage cust
 ## Multi-tenancy model
 Every entity carries `workspace_id`. Requests require `X-Workspace-Id` header + JWT. Membership lookup enforces role-based access.
 
+## Delivered (2026-02) — Iteration 4 (Import + Automation)
+
+### CSV Import Wizard
+- 3-step wizard: pick entity (lead/customer) → upload CSV → auto-inferred column mapping → confirm & execute
+- Backend: `POST /api/import/preview` returns headers, sample rows, target fields, suggested mapping (fuzzy field-name match); `POST /api/import/execute` bulk-creates with per-row error capture
+- Client-side CSV parsing via `FileReader` (no extra deps); server-side parsing via stdlib `csv`
+- Audit logged as `imported <entity> batch` with row count + error count
+- Permission-gated: requires `lead.create` or `customer.create` for the chosen entity
+- Verified: 2/2 rows imported end-to-end via curl
+
+### Workflow Automation Engine
+- Trigger → Conditions → Actions builder
+- Triggers: `lead_created`, `lead_scored`, `customer_created`, `deal_created`, `deal_stage_changed`
+- Conditions: field/op/value with ops `eq/neq/gt/gte/lt/lte/contains/in`; **AND** semantics (all must match)
+- Actions: `create_task` (with assignee + priority + auto-linked to entity), `assign_user`, `notify_user`, `add_tag`
+- Backend `fire_workflows(trigger, workspace_id, record)` dispatch wired into: create_lead, create_customer, create_deal, update_deal_stage, ai_score_lead
+- Workflows persist `run_count` and `last_run_at`
+- Admin-only page at `/app/workflows`; toggle enable/disable, edit, delete
+- Verified end-to-end: created "score > 80 → add hot-lead tag + create high-priority task" workflow → scored a lead 82 → tag added, task auto-created, run_count = 1
+
 ## Delivered (2026-02) — Iteration 3 (Professional SaaS polish)
 
 ### Enhanced RBAC (6 roles + permission matrix)

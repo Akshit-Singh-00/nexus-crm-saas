@@ -1,0 +1,54 @@
+{
+  "summary": "Iteration 4 (CSV Import + Workflow Automation) tested end-to-end. Backend: 17/17 pytest cases pass in /app/backend/tests/test_iteration4.py — /api/import/preview & /api/import/execute (lead + customer, viewer 403, row-without-name goes to errors + not inserted, persistence verified via GET /leads), workflow CRUD (POST/GET/PUT/DELETE with settings.manage RBAC; manager & member get 403 on create; manager 403 on delete), workflow execution end-to-end (lead_scored condition score>80 → run_count incremented + task 'TEST_Call hot lead' priority=high created linked to lead + 'hot-lead' tag added via $addToSet), unreachable condition score>200 keeps run_count=0 and does not apply tag, deal_stage_changed → notify_user creates member notification (verified via GET /notifications), cross-tenant isolation (workflow in workspace A does NOT fire on lead created in workspace B — run_count stays 0). Frontend Playwright (as demo owner Acme Inc): Sidebar Admin section shows Import + Workflows links; /app/import — 3-step wizard renders, entity selector, file upload with data-testid=import-file-input, suggested mapping pre-selected (Full Name→name, Email→email), execute inserts 2, errors 1 (missing name row), success card shows 'Import complete · 2 leads imported successfully · 1 row skipped'; /app/workflows — 'New workflow' dialog opens, trigger select switches to lead_scored, add condition + fill 80, task title + add second action of type add_tag + tag value, submit creates workflow row with trigger badge 'LEAD IS SCORED BY AI' visible (badge is CSS-uppercased).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/workflows", "issue": "Guarded by require_perm('settings','view') which allows owner/admin/manager. Iteration-4 spec says list should be visible to owner/admin only (matches 'admin only' language in review). Currently manager can GET /api/workflows but cannot POST/PUT/DELETE (those correctly require settings.manage = owner/admin). Not blocking but worth noting."},
+      {"endpoint": "POST /api/import/execute", "issue": "Import does not fire workflows on the newly-created rows (no fire_workflows('lead_created' or 'customer_created') per inserted doc). If a lead_created workflow exists, CSV import bypasses it entirely. Probably intentional for bulk, but should be documented; consider a 'run_workflows' boolean in ImportExecuteIn."},
+      {"endpoint": "POST /api/import/execute", "issue": "value coercion falls back to 0 on ValueError silently — no per-row error surfaced. Also empty CSV cell for a mapped column is silently dropped (no default), which is fine for optional fields, but 'value' will default to 0 via setdefault only when unmapped, not when mapped-but-empty (kept as 'default via setdefault' would not apply because key never got set — actually current code does setdefault('value', 0) so OK). Verify column with only whitespace behavior — current .strip() handles it."},
+      {"endpoint": "POST /api/import/execute", "issue": "No max row limit — a 1M-row CSV would time out the request. Consider hard cap (e.g., 10k rows) or streaming."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "DialogContent (workflow builder)", "issue": "Console warning: 'Missing Description or aria-describedby={undefined} for DialogContent' — accessibility miss. Add DialogDescription.", "selector": "workflow builder dialog", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/app/workflows list", "issues": ["Trigger badge text is CSS-uppercased ('LEAD IS SCORED BY AI') which is stylistic but reduces readability of longer trigger labels. Consider small-caps or normal case."]},
+      {"screen": "/app/import step-2 mapping", "issues": ["When many CSV columns exist the mapping list has no virtual scroll and the two mapping-select controls per row do not visually indicate the ones auto-suggested vs manually chosen (nice-to-have)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4.py",
+    "/app/test_reports/pytest/iter4_results.xml"
+  ],
+  "action_items": [
+    "Consider tightening GET /api/workflows to owner/admin only (currently manager can list).",
+    "Decide whether CSV import should trigger *_created workflows on inserted rows (currently bypassed).",
+    "Add DialogDescription to the workflow builder DialogContent to remove a11y console warning.",
+    "Add row cap / pagination to /api/import/execute to prevent DoS via giant CSVs."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1876 lines — long overdue split into routers (auth, workspaces, invites, customers, leads, deals, tasks, notes, tickets, ai, imports, workflows).",
+    "fire_workflows runs actions sequentially inline in the request path (create_lead/deal etc.). A slow action (e.g., a future email send) will directly block the API response. Consider fire-and-forget via asyncio.create_task or a background queue.",
+    "_execute_action('assign_user' / 'add_tag') looks up collection by workflow._entity_type but never verifies record actually belongs to the current workspace beyond the {'id', 'workspace_id'} filter — that filter is present and correct here, good.",
+    "_eval_condition converts to float unconditionally for gt/gte/lt/lte — a non-numeric target string will raise inside the try and return False (safe), but a numeric-string vs int record.field mismatch (e.g., '80' > 80) may silently coerce incorrectly. Consider stronger normalization.",
+    "_infer_mapping is naive (substring match both directions) — 'company' would map 'Phone Company' -> 'company', and 'name' would match 'Company Name' -> 'name' (since 'name' in 'Company Name'). Consider prioritizing exact / word-boundary matches, and preferring longer field names first.",
+    "Import execute has no transaction / rollback — partial inserts persist on interrupted requests. For 'lead' entity, unique-email is not enforced (existing code does not create a unique index on lead.email per workspace), so re-running the same CSV duplicates rows.",
+    "WorkflowIn.actions has no min_length constraint — an empty actions list would be a no-op workflow that still increments run_count on trigger. Add Field(min_length=1) or reject in POST.",
+    "list_workflows uses require_perm('settings','view') — spec implied admin-only management. Verify intent."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration4.py (new)",
+    "/app/test_reports/iteration_4.json (new)",
+    "/app/test_reports/pytest/iter4_results.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (17/17 iter-4 tests)", "frontend": "100% of scripted iter-4 flows (import wizard 3 steps + workflow create + sidebar)"},
+  "test_credentials": "Demo owner: demo@nexus.com / demo1234. Test suite spins up fresh owner + admin/manager/member/viewer invitees per run.",
+  "seed_data_creation": "Backend test run creates workspace WS4_<UNIQUE> with 4 role invitees, imports 3 TEST_ leads via CSV, creates 4 workflows (Hot lead followup, Unreachable, DealWon, XT), scores 1 lead twice (Claude), creates 1 deal moved to won. Frontend Playwright created 1 additional workflow 'TEST_UI_WF_<ts>' on Acme Inc and imported 2 TEST_UI leads.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration-4 pytest lives at /app/backend/tests/test_iteration4.py and is idempotent (new workspace per run). Notifications list endpoint returns {items:[], unread:int} not a bare array — remember that if writing new tests. Workflow trigger badge is CSS-uppercased, so match case-insensitively when asserting via inner_text. fire_workflows is awaited inline in create_lead / create_customer / create_deal / update_deal_stage / ai_score_lead — cross-tenant isolation confirmed. /api/import/execute currently does NOT fire workflows on inserted rows.",
+  "rca of the issue": "No blocking bugs found. Backend RBAC + workflow execution + condition evaluation + cross-tenant isolation + CSV import parse/mapping/execute all behave per spec. Minor code-quality items listed above."
+}

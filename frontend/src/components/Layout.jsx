@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
   LayoutDashboard, Users, Target, Kanban, CheckSquare, UsersRound, Receipt,
-  LifeBuoy, Settings2, Shield, LogOut, Hexagon, ChevronDown, Search, Sun, Moon, Brain,
+  LifeBuoy, Settings2, Shield, Upload, Zap, LogOut, Hexagon, ChevronDown, Search, Sun, Moon, Brain,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
@@ -26,6 +26,8 @@ const NAV = [
 ];
 
 const ADMIN_NAV = [
+  { to: "/app/import", label: "Import", icon: Upload, roles: ["owner", "admin", "manager"] },
+  { to: "/app/workflows", label: "Workflows", icon: Zap, roles: ["owner", "admin"] },
   { to: "/app/settings", label: "Settings", icon: Settings2, roles: ["owner", "admin"] },
   { to: "/app/audit", label: "Audit log", icon: Shield, roles: ["owner", "admin"] },
   { to: "/app/billing", label: "Billing", icon: Receipt, roles: ["owner", "admin"] },

@@ -15,6 +15,8 @@ import Billing from "@/pages/Billing";
 import Settings from "@/pages/Settings";
 import Tickets from "@/pages/Tickets";
 import AuditLog from "@/pages/AuditLog";
+import Import from "@/pages/Import";
+import Workflows from "@/pages/Workflows";
 import InviteAccept from "@/pages/InviteAccept";
 import CustomerDetail from "@/pages/CustomerDetail";
 import Landing from "@/pages/Landing";
@@ -58,6 +60,8 @@ function App() {
             <Route path="/app/tickets" element={<WithWorkspace><Tickets /></WithWorkspace>} />
             <Route path="/app/settings" element={<WithWorkspace><Settings /></WithWorkspace>} />
             <Route path="/app/audit" element={<WithWorkspace><AuditLog /></WithWorkspace>} />
+            <Route path="/app/import" element={<WithWorkspace><Import /></WithWorkspace>} />
+            <Route path="/app/workflows" element={<WithWorkspace><Workflows /></WithWorkspace>} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>
